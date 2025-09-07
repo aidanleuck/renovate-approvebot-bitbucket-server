@@ -11,7 +11,9 @@ COPY package.json package-lock.json ./
 
 RUN npm ci --omit=dev
 
-COPY index.js .
+# Copy application code
+COPY index.js ./
+COPY src/ ./src/
 
 USER 1000:1000
 

@@ -1,4 +1,8 @@
 const nock = require('nock');
+const {
+  MANUAL_MERGE_MESSAGE,
+  AUTO_MERGE_MESSAGE,
+} = require('../src/constants');
 
 // Constants for test setup
 const BITBUCKET_SERVER_URL = 'https://bitbucket.mycompany.com';
@@ -8,10 +12,9 @@ const RENOVATE_BOT_USER = 'renovate-bot';
 const PR_AUTHOR_USER = 'pr-author-user';
 const API_BASE_URL = `${BITBUCKET_SERVER_URL}/rest/api/1.0`;
 
-// Test helper constants
-const autoMergeDescription = '...\n\n🚦 **Automerge**: Enabled.\n\n...';
-const manualMergeDescription =
-  '...\n\n🚦 **Automerge**: Disabled by config. Please merge this manually once you are satisfied.\n\n...';
+// Test helper constants - Create descriptions that match the pattern in the code but with our constants
+const autoMergeDescription = `...\n\n🚦 ${AUTO_MERGE_MESSAGE}\n\n...`;
+const manualMergeDescription = `...\n\n🚦 ${MANUAL_MERGE_MESSAGE} once you are satisfied.\n\n...`;
 
 // Set up static environment variables that rarely change between tests
 function setupStaticEnvironment() {
@@ -39,7 +42,7 @@ function getBotInstance() {
   // Reset modules to get a fresh instance with current environment
   jest.resetModules();
   // eslint-disable-next-line global-require
-  return require('./index');
+  return require('../src/bot');
 }
 
 function mockProjects(projects = []) {
@@ -673,8 +676,8 @@ describe('main with dry run', () => {
 
 describe('main validation', () => {
   beforeEach(() => {
-    jest.spyOn(process, 'exit').mockImplementation(() => { });
-    jest.spyOn(console, 'error').mockImplementation(() => { });
+    jest.spyOn(process, 'exit').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
     // Clean up any hanging nocks
     nock.cleanAll();
   });
@@ -726,7 +729,7 @@ describe('main validation', () => {
     process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
 
     // Mock exit to ensure it's not called
-    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => { });
+    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {});
 
     const bot = getBotInstance();
 

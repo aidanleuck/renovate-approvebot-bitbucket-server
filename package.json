@@ -5,7 +5,7 @@
   "scripts": {
     "eslint": "eslint --ext .js .",
     "eslint-fix": "eslint --ext .js --fix .",
-    "jest": "jest",
+    "jest": "jest --testPathPattern=tests/",
     "lint": "run-s eslint prettier",
     "lint-fix": "run-s eslint-fix prettier-fix",
     "prettier": "prettier --check \"**/*.{js,json,md,yml}\"",
