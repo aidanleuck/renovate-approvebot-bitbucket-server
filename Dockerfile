@@ -9,7 +9,7 @@ WORKDIR /opt/app
 
 COPY package.json package-lock.json ./
 
-RUN npm install --production
+RUN npm ci --omit=dev
 
 COPY index.js .
 
