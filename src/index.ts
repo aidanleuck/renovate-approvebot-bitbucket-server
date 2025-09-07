@@ -1,6 +1,15 @@
-const bunyan = require('bunyan');
-const got = require('got');
-const { MANUAL_MERGE_MESSAGE, AUTO_MERGE_MESSAGE } = require('./constants');
+import bunyan from 'bunyan';
+import got from 'got';
+import { MANUAL_MERGE_MESSAGE, AUTO_MERGE_MESSAGE } from './constants';
+import {
+  Project,
+  Repository,
+  PullRequest,
+  ProcessedPullRequest,
+  ApiResponse,
+  GotOptions,
+  GotResponse,
+} from './types';
 
 const {
   BITBUCKET_SERVER_URL,
@@ -11,7 +20,7 @@ const {
   DRY_RUN,
 } = process.env;
 
-const DEFAULT_OPTIONS = {
+const DEFAULT_OPTIONS: GotOptions = {
   prefixUrl: `${BITBUCKET_SERVER_URL}/rest/api/1.0/`,
   headers: {
     Authorization: `Bearer ${BITBUCKET_TOKEN}`,
@@ -30,7 +39,7 @@ const log = bunyan.createLogger({
 /**
  * Print the current configuration of the bot, omitting sensitive information.
  */
-function printConfiguration() {
+function printConfiguration(): void {
   log.info(
     {
       configuration: {
@@ -47,7 +56,7 @@ function printConfiguration() {
   );
 }
 
-function isAutomerging(pr) {
+function isAutomerging(pr: PullRequest): boolean {
   try {
     if (!pr.description) {
       return false;
@@ -62,7 +71,7 @@ function isAutomerging(pr) {
   }
 }
 
-async function getAllProjects() {
+async function getAllProjects(): Promise<Project[]> {
   const projectsEndpoint = 'projects';
   log.info(
     'Autodiscovering projects from %s%s...',
@@ -78,23 +87,23 @@ async function getAllProjects() {
       },
     });
 
-    return response.body.values || [];
+    return (response.body as ApiResponse<Project>).values || [];
   } catch (error) {
     log.error(error, 'Failed to get projects');
     throw error;
   }
 }
 
-async function getProjectKeys() {
+async function getProjectKeys(): Promise<string[]> {
   // Parse the BITBUCKET_PROJECTS environment variable if it exists
-  let projectKeys = [];
+  let projectKeys: string[] = [];
   let shouldAutodiscover = true;
 
   if (BITBUCKET_PROJECTS) {
     try {
       // Try parsing as JSON array first
       projectKeys = JSON.parse(BITBUCKET_PROJECTS);
-    } catch (error) {
+    } catch {
       // If not JSON, treat as comma-separated string
       projectKeys = BITBUCKET_PROJECTS.split(',')
         .map((key) => key.trim())
@@ -123,13 +132,15 @@ async function getProjectKeys() {
   return projectKeys;
 }
 
-async function getAllRepositories(projectKeys) {
+async function getAllRepositories(
+  projectKeys: string[]
+): Promise<Repository[]> {
   try {
     if (!projectKeys || projectKeys.length === 0) {
       throw new Error('Project keys must be provided');
     }
 
-    const allRepositories = [];
+    const allRepositories: Repository[] = [];
 
     // eslint-disable-next-line no-await-in-loop
     for (const projectKey of projectKeys) {
@@ -149,7 +160,9 @@ async function getAllRepositories(projectKeys) {
           },
         });
 
-        const repositories = (response.body.values || []).map((repo) => ({
+        const repositories = (
+          (response.body as ApiResponse<Repository>).values || []
+        ).map((repo) => ({
           ...repo,
           projectKey,
         }));
@@ -171,7 +184,10 @@ async function getAllRepositories(projectKeys) {
   }
 }
 
-async function getPullRequestsForRepo(projectKey, repoSlug) {
+async function getPullRequestsForRepo(
+  projectKey: string,
+  repoSlug: string
+): Promise<ProcessedPullRequest[]> {
   const prEndpoint = `projects/${projectKey}/repos/${repoSlug}/pull-requests`;
   log.info(
     'Requesting PRs from %s%s...',
@@ -188,7 +204,7 @@ async function getPullRequestsForRepo(projectKey, repoSlug) {
       },
     });
 
-    const allPrs = response.body.values || [];
+    const allPrs = (response.body as ApiResponse<PullRequest>).values || [];
 
     // Filter PRs by PR author user and automerge status
     return allPrs
@@ -210,7 +226,7 @@ async function getPullRequestsForRepo(projectKey, repoSlug) {
   }
 }
 
-async function getPullRequests() {
+async function getPullRequests(): Promise<ProcessedPullRequest[]> {
   try {
     const projectKeys = await getProjectKeys();
     const repositories = await getAllRepositories(projectKeys);
@@ -218,7 +234,7 @@ async function getPullRequests() {
       `Found ${repositories.length} repositories across all accessible projects`
     );
 
-    const allPullRequests = [];
+    const allPullRequests: ProcessedPullRequest[] = [];
 
     // eslint-disable-next-line no-await-in-loop
     for (const repo of repositories) {
@@ -237,7 +253,7 @@ async function getPullRequests() {
   }
 }
 
-function approvePullRequest(pr) {
+function approvePullRequest(pr: ProcessedPullRequest): Promise<GotResponse> {
   // Use RENOVATE_BOT_USER for approvals
   const participantsEndpoint = `projects/${pr.projectKey}/repos/${pr.repoSlug}/pull-requests/${pr.id}/participants/${RENOVATE_BOT_USER}`;
 
@@ -253,10 +269,10 @@ function approvePullRequest(pr) {
       status: 'APPROVED',
     },
     throwHttpErrors: false,
-  });
+  }) as unknown as Promise<GotResponse>;
 }
 
-async function main() {
+async function main(): Promise<void> {
   if (!BITBUCKET_SERVER_URL || !BITBUCKET_TOKEN || !RENOVATE_BOT_USER) {
     log.fatal(
       'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, RENOVATE_BOT_USER environment variables is not set.'
@@ -285,12 +301,13 @@ async function main() {
     log.info('DRY RUN MODE: No actual approvals will be made');
   }
 
-  let pullRequests;
+  let pullRequests: ProcessedPullRequest[];
   try {
     pullRequests = await getPullRequests();
   } catch (error) {
     log.fatal(error);
     process.exit(1);
+    return; // This line is just for TypeScript, as process.exit(1) will terminate execution
   }
 
   for (const pr of pullRequests) {
@@ -348,11 +365,7 @@ async function main() {
   }
 }
 
-if (require.main === module) {
-  main();
-}
-
-module.exports = {
+export {
   isAutomerging,
   getAllProjects,
   getProjectKeys,

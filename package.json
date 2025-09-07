@@ -3,14 +3,17 @@
   "description": "A job to approve Pull Requests from Renovate Bot on Bitbucket Server.",
   "private": true,
   "scripts": {
-    "eslint": "eslint --ext .js .",
-    "eslint-fix": "eslint --ext .js --fix .",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc",
+    "eslint": "eslint --ext .ts,.js .",
+    "eslint-fix": "eslint --ext .ts,.js --fix .",
     "jest": "jest --testPathPattern=tests/",
     "lint": "run-s eslint prettier",
     "lint-fix": "run-s eslint-fix prettier-fix",
-    "prettier": "prettier --check \"**/*.{js,json,md,yml}\"",
-    "prettier-fix": "prettier --write \"**/*.{js,json,md,yml}\"",
-    "start": "node ./index.js",
+    "prettier": "prettier --check \"**/*.{ts,js,json,md,yml}\"",
+    "prettier-fix": "prettier --write \"**/*.{ts,js,json,md,yml}\"",
+    "start": "node ./dist/index.js",
+    "dev": "ts-node ./index.ts",
     "test": "run-s lint jest"
   },
   "repository": {
@@ -41,6 +44,13 @@
   "devDependencies": {
     "@babel/preset-env": "7.26.0",
     "@semantic-release/exec": "7.1.0",
+    "@types/bunyan": "^1.8.11",
+    "@types/got": "^9.6.12",
+    "@types/jest": "^30.0.0",
+    "@types/nock": "^10.0.3",
+    "@types/node": "^24.3.1",
+    "@typescript-eslint/eslint-plugin": "^8.42.0",
+    "@typescript-eslint/parser": "^8.42.0",
     "babel-plugin-rewire": "1.2.0",
     "conventional-changelog-conventionalcommits": "8.0.0",
     "eslint": "8.57.1",
@@ -54,7 +64,10 @@
     "nock": "14.0.10",
     "npm-run-all2": "7.0.2",
     "prettier": "3.6.2",
-    "semantic-release": "24.2.7"
+    "semantic-release": "24.2.7",
+    "ts-jest": "^29.4.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
   },
   "packageManager": "npm@10.9.2"
 }

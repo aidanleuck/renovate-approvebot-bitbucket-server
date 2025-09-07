@@ -7,14 +7,17 @@ LABEL \
 
 WORKDIR /opt/app
 
-COPY package.json package-lock.json ./
+# Copy package files
+COPY package.json package-lock.json tsconfig.json ./
 
-RUN npm ci --omit=dev
-
-# Copy application code
-COPY index.js ./
+# Install dependencies, build, and clean up in a single layer to reduce image size
 COPY src/ ./src/
+COPY index.ts ./
+RUN npm install && \
+    npm run build && \
+    rm -rf node_modules && \
+    npm ci --omit=dev
 
 USER 1000:1000
 
-CMD ["index.js"]
+CMD ["node", "dist/index.js"]

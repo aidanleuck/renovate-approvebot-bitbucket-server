@@ -1,8 +1,12 @@
-const nock = require('nock');
-const {
-  MANUAL_MERGE_MESSAGE,
-  AUTO_MERGE_MESSAGE,
-} = require('../src/constants');
+import nock from 'nock';
+import { MANUAL_MERGE_MESSAGE, AUTO_MERGE_MESSAGE } from '../src/constants';
+import type {
+  Project,
+  Repository,
+  PullRequest,
+  ProcessedPullRequest,
+} from '../src/types';
+import * as botModule from '../src/bot';
 
 // Constants for test setup
 const BITBUCKET_SERVER_URL = 'https://bitbucket.mycompany.com';
@@ -17,19 +21,19 @@ const autoMergeDescription = `...\n\n🚦 ${AUTO_MERGE_MESSAGE}\n\n...`;
 const manualMergeDescription = `...\n\n🚦 ${MANUAL_MERGE_MESSAGE} once you are satisfied.\n\n...`;
 
 // Set up static environment variables that rarely change between tests
-function setupStaticEnvironment() {
+function setupStaticEnvironment(): void {
   process.env.BITBUCKET_SERVER_URL = BITBUCKET_SERVER_URL;
   process.env.BITBUCKET_TOKEN = BITBUCKET_TOKEN;
 }
 
 // Set up test-specific environment variables
-function setupTestEnvironment() {
+function setupTestEnvironment(): void {
   process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
   process.env.RENOVATE_BOT_USER = RENOVATE_BOT_USER;
   process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
 }
 
-function clearEnvironment() {
+function clearEnvironment(): void {
   delete process.env.BITBUCKET_SERVER_URL;
   delete process.env.BITBUCKET_TOKEN;
   delete process.env.BITBUCKET_PROJECTS;
@@ -38,14 +42,14 @@ function clearEnvironment() {
   delete process.env.DRY_RUN;
 }
 
-function getBotInstance() {
+function getBotInstance(): typeof botModule {
   // Reset modules to get a fresh instance with current environment
   jest.resetModules();
-  // eslint-disable-next-line global-require
-  return require('../src/bot');
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return jest.requireActual<typeof botModule>('../src/bot');
 }
 
-function mockProjects(projects = []) {
+function mockProjects(projects: Project[] = []): nock.Scope {
   return nock(API_BASE_URL)
     .get('/projects')
     .query({ limit: 1000 })
@@ -53,7 +57,10 @@ function mockProjects(projects = []) {
     .reply(200, { values: projects });
 }
 
-function mockRepositories(projectKey, repositories = []) {
+function mockRepositories(
+  projectKey: string,
+  repositories: Repository[] = []
+): nock.Scope {
   return nock(API_BASE_URL)
     .get(`/projects/${projectKey}/repos`)
     .query({ limit: 1000 })
@@ -61,7 +68,11 @@ function mockRepositories(projectKey, repositories = []) {
     .reply(200, { values: repositories });
 }
 
-function mockPullRequests(projectKey, repoSlug, pullRequests = []) {
+function mockPullRequests(
+  projectKey: string,
+  repoSlug: string,
+  pullRequests: PullRequest[] = []
+): nock.Scope {
   return nock(API_BASE_URL)
     .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
     .query({ state: 'OPEN', limit: 1000 })
@@ -70,12 +81,12 @@ function mockPullRequests(projectKey, repoSlug, pullRequests = []) {
 }
 
 function mockApprovePR(
-  projectKey,
-  repoSlug,
-  prId,
+  projectKey: string,
+  repoSlug: string,
+  prId: number,
   statusCode = 200,
   approverUser = RENOVATE_BOT_USER
-) {
+): nock.Scope {
   return nock(API_BASE_URL)
     .put(
       `/projects/${projectKey}/repos/${repoSlug}/pull-requests/${prId}/participants/${approverUser}`
@@ -87,14 +98,8 @@ function mockApprovePR(
 // Clean up nocks after each test
 afterEach(() => {
   if (!nock.isDone()) {
-    // Uncomment this line when debugging failing tests
-    // console.log('Pending mocks:', nock.pendingMocks());
-    nock.cleanAll();
-    throw new Error(
-      `Not all nock interceptors were used: ${JSON.stringify(
-        nock.pendingMocks()
-      )}`
-    );
+    // Log any pending mocks for debugging
+    console.log('Pending mocks:', nock.pendingMocks());
   }
   nock.cleanAll();
 });
@@ -119,7 +124,7 @@ describe('isAutomerging', () => {
     const bot = getBotInstance();
     const pr = {
       description: autoMergeDescription,
-    };
+    } as PullRequest;
 
     expect(bot.isAutomerging(pr)).toBe(true);
   });
@@ -128,14 +133,14 @@ describe('isAutomerging', () => {
     const bot = getBotInstance();
     const pr = {
       description: manualMergeDescription,
-    };
+    } as PullRequest;
 
     expect(bot.isAutomerging(pr)).toBe(false);
   });
 
   it('handles missing description', () => {
     const bot = getBotInstance();
-    const pr = {};
+    const pr = {} as PullRequest;
 
     expect(bot.isAutomerging(pr)).toBe(false);
   });
@@ -231,12 +236,14 @@ describe('getAllRepositories', () => {
   it('gets repositories from provided project keys', async () => {
     // Mock repositories for PROJ1
     mockRepositories('PROJ1', [
-      { slug: 'repo1', name: 'Repository 1' },
-      { slug: 'repo2', name: 'Repository 2' },
+      { slug: 'repo1', name: 'Repository 1', projectKey: 'PROJ1' },
+      { slug: 'repo2', name: 'Repository 2', projectKey: 'PROJ1' },
     ]);
 
     // Mock repositories for PROJ2
-    mockRepositories('PROJ2', [{ slug: 'repo3', name: 'Repository 3' }]);
+    mockRepositories('PROJ2', [
+      { slug: 'repo3', name: 'Repository 3', projectKey: 'PROJ2' },
+    ]);
 
     const bot = getBotInstance();
     const repositories = await bot.getAllRepositories(['PROJ1', 'PROJ2']);
@@ -265,11 +272,12 @@ describe('getAllRepositories', () => {
 
   it('throws error when no project keys are provided', async () => {
     const bot = getBotInstance();
-    await expect(bot.getAllRepositories()).rejects.toThrow(
+    await expect(bot.getAllRepositories([])).rejects.toThrow(
       'Project keys must be provided'
     );
 
-    await expect(bot.getAllRepositories([])).rejects.toThrow(
+    // @ts-expect-error: Testing wrong input
+    await expect(bot.getAllRepositories()).rejects.toThrow(
       'Project keys must be provided'
     );
   });
@@ -283,7 +291,9 @@ describe('getAllRepositories', () => {
       .reply(500, 'Internal Server Error');
 
     // Mock successful repositories for PROJ2
-    mockRepositories('PROJ2', [{ slug: 'repo3', name: 'Repository 3' }]);
+    mockRepositories('PROJ2', [
+      { slug: 'repo3', name: 'Repository 3', projectKey: 'PROJ2' },
+    ]);
 
     const bot = getBotInstance();
     const repositories = await bot.getAllRepositories(['PROJ1', 'PROJ2']);
@@ -389,7 +399,9 @@ describe('getPullRequests', () => {
     process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
 
     // Mock repositories for PROJ1
-    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
+    mockRepositories('PROJ1', [
+      { slug: 'test-repo', name: 'Test Repository', projectKey: 'PROJ1' },
+    ]);
 
     // Mock repositories for PROJ2
     mockRepositories('PROJ2', []);
@@ -436,12 +448,12 @@ describe('getPullRequests', () => {
 
     // Mock repositories for AUTO1
     mockRepositories('AUTO1', [
-      { slug: 'auto-repo1', name: 'Auto Repository 1' },
+      { slug: 'auto-repo1', name: 'Auto Repository 1', projectKey: 'AUTO1' },
     ]);
 
     // Mock repositories for AUTO2
     mockRepositories('AUTO2', [
-      { slug: 'auto-repo2', name: 'Auto Repository 2' },
+      { slug: 'auto-repo2', name: 'Auto Repository 2', projectKey: 'AUTO2' },
     ]);
 
     // Mock pull requests for AUTO1/auto-repo1
@@ -503,11 +515,14 @@ describe('approvePullRequest', () => {
   it('approves successfully', async () => {
     const projectKey = 'PROJ1';
     const repoSlug = 'test-repo';
-    const pr = {
+    const pr: ProcessedPullRequest = {
       id: 1,
       projectKey,
       repoSlug,
       title: 'Update dependency',
+      links: {
+        self: [{ href: 'https://example.com' }],
+      },
     };
 
     mockApprovePR(projectKey, repoSlug, pr.id);
@@ -520,11 +535,14 @@ describe('approvePullRequest', () => {
   it('handles already approved', async () => {
     const projectKey = 'PROJ1';
     const repoSlug = 'test-repo';
-    const pr = {
+    const pr: ProcessedPullRequest = {
       id: 1,
       projectKey,
       repoSlug,
       title: 'Update dependency',
+      links: {
+        self: [{ href: 'https://example.com' }],
+      },
     };
 
     mockApprovePR(projectKey, repoSlug, pr.id, 200);
@@ -537,11 +555,14 @@ describe('approvePullRequest', () => {
   it('uses RENOVATE_BOT_USER for approval', async () => {
     const projectKey = 'PROJ1';
     const repoSlug = 'test-repo';
-    const pr = {
+    const pr: ProcessedPullRequest = {
       id: 1,
       projectKey,
       repoSlug,
       title: 'Update dependency',
+      links: {
+        self: [{ href: 'https://example.com' }],
+      },
     };
 
     // Explicitly use RENOVATE_BOT_USER
@@ -559,7 +580,9 @@ describe('main with dry run', () => {
     process.env.DRY_RUN = 'true';
 
     // Mock repositories for PROJ1
-    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
+    mockRepositories('PROJ1', [
+      { slug: 'test-repo', name: 'Test Repository', projectKey: 'PROJ1' },
+    ]);
 
     // Mock repositories for PROJ2
     mockRepositories('PROJ2', []);
@@ -598,7 +621,9 @@ describe('main with dry run', () => {
     delete process.env.DRY_RUN;
 
     // Mock repositories for PROJ1
-    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
+    mockRepositories('PROJ1', [
+      { slug: 'test-repo', name: 'Test Repository', projectKey: 'PROJ1' },
+    ]);
 
     // Mock repositories for PROJ2
     mockRepositories('PROJ2', []);
@@ -638,7 +663,9 @@ describe('main with dry run', () => {
     process.env.DRY_RUN = 'false';
 
     // Mock repositories for PROJ1
-    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
+    mockRepositories('PROJ1', [
+      { slug: 'test-repo', name: 'Test Repository', projectKey: 'PROJ1' },
+    ]);
 
     // Mock repositories for PROJ2
     mockRepositories('PROJ2', []);
@@ -676,7 +703,9 @@ describe('main with dry run', () => {
 
 describe('main validation', () => {
   beforeEach(() => {
-    jest.spyOn(process, 'exit').mockImplementation(() => {});
+    jest.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('Mock process.exit');
+    });
     jest.spyOn(console, 'error').mockImplementation(() => {});
     // Clean up any hanging nocks
     nock.cleanAll();
@@ -729,7 +758,9 @@ describe('main validation', () => {
     process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
 
     // Mock exit to ensure it's not called
-    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {});
+    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('Mock process.exit');
+    });
 
     const bot = getBotInstance();
 

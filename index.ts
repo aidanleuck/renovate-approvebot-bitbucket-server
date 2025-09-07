@@ -2,10 +2,10 @@
  * Entry point for the application
  */
 
-const bot = require('./src/bot');
+import * as bot from './src/bot';
 
 // Export all functions from the bot
-module.exports = bot;
+export default bot;
 
 // Run main if this is the main module
 if (require.main === module) {
