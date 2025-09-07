@@ -25,6 +25,7 @@ On each run, the bot will:
    - `BITBUCKET_TOKEN`: Personal Access Token created in step 2
    - `BITBUCKET_PROJECT`: Bitbucket Server project key where repositories will be searched
    - `RENOVATE_BOT_USER`: Bitbucket Server username of your Renovate Bot
+   - `DRY_RUN` (optional): Set to `true` to enable dry run mode, which will only log what would be approved without making actual API calls
 6. Run the bot (on a schedule similarly to Renovate Bot, e.g. as a [Cron](https://en.wikipedia.org/wiki/Cron) job):
    - With Docker:
 
@@ -34,6 +35,7 @@ On each run, the bot will:
        --env BITBUCKET_TOKEN \
        --env BITBUCKET_PROJECT \
        --env RENOVATE_BOT_USER \
+       --env DRY_RUN \
        ghcr.io/aidanleuck/renovate-approve-bot-bitbucket-server:latest
      ```
 
@@ -53,6 +55,31 @@ export BITBUCKET_SERVER_URL="https://bitbucket.mycompany.com"
 export BITBUCKET_TOKEN="your-personal-access-token"
 export BITBUCKET_PROJECT="MYPROJ"
 export RENOVATE_BOT_USER="renovate-bot"
+```
+
+## Dry Run Mode
+
+The bot supports a dry run mode where it will discover and log what PRs would be approved without actually making any approval API calls. This is useful for testing configuration or seeing what the bot would do before running it for real.
+
+To enable dry run mode, set the `DRY_RUN` environment variable to `true`:
+
+```bash
+export DRY_RUN="true"
+```
+
+In dry run mode, the bot will:
+
+- Still fetch repositories and pull requests from Bitbucket Server
+- Log which PRs it would approve with the message "DRY RUN: Would approve PR: ..."
+- **Not** make any actual approval API calls
+- Log "DRY RUN MODE: No actual approvals will be made" at startup
+
+Example dry run output:
+
+```
+{"level":30,"msg":"DRY RUN MODE: No actual approvals will be made"}
+{"level":30,"msg":"Found 1 automerge PRs from renovate-bot"}
+{"level":30,"msg":"DRY RUN: Would approve PR: MYPROJ/my-repo#123 - Update dependency foo to v1.2.3"}
 ```
 
 ## Kubernetes Example

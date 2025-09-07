@@ -6,6 +6,7 @@ const {
   BITBUCKET_TOKEN,
   BITBUCKET_PROJECT,
   RENOVATE_BOT_USER,
+  DRY_RUN,
 } = process.env;
 const MANUAL_MERGE_MESSAGE = 'merge this manually';
 const AUTO_MERGE_MESSAGE = '**Automerge**: Enabled.';
@@ -152,6 +153,12 @@ async function main() {
     process.exit(1);
   }
 
+  const isDryRun = DRY_RUN && DRY_RUN.toLowerCase() === 'true';
+
+  if (isDryRun) {
+    log.info('DRY RUN MODE: No actual approvals will be made');
+  }
+
   let pullRequests;
   try {
     pullRequests = await getPullRequests();
@@ -161,46 +168,56 @@ async function main() {
   }
 
   for (const pr of pullRequests) {
-    log.info(
-      'Approving PR: %s/%s#%d - %s',
-      pr.projectKey,
-      pr.repoSlug,
-      pr.id,
-      pr.title
-    );
+    if (isDryRun) {
+      log.info(
+        'DRY RUN: Would approve PR: %s/%s#%d - %s',
+        pr.projectKey,
+        pr.repoSlug,
+        pr.id,
+        pr.title
+      );
+    } else {
+      log.info(
+        'Approving PR: %s/%s#%d - %s',
+        pr.projectKey,
+        pr.repoSlug,
+        pr.id,
+        pr.title
+      );
 
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const response = await approvePullRequest(pr);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const response = await approvePullRequest(pr);
 
-      switch (response.statusCode) {
-        case 200:
-          log.info({ pr: pr.id, res: response }, 'Approved');
-          break;
-        case 409:
-          // likely already approved
-          if (
-            response.body &&
-            response.body.errors &&
-            response.body.errors.length > 0
-          ) {
-            log.info(
-              { pr: pr.id, res: response },
-              response.body.errors[0].message
-            );
-          } else {
-            log.info(
-              { pr: pr.id, res: response },
-              'Already approved or conflict'
-            );
-          }
-          break;
-        default:
-          log.error({ pr: pr.id, res: response }, response.body);
-          break;
+        switch (response.statusCode) {
+          case 200:
+            log.info({ pr: pr.id, res: response }, 'Approved');
+            break;
+          case 409:
+            // likely already approved
+            if (
+              response.body &&
+              response.body.errors &&
+              response.body.errors.length > 0
+            ) {
+              log.info(
+                { pr: pr.id, res: response },
+                response.body.errors[0].message
+              );
+            } else {
+              log.info(
+                { pr: pr.id, res: response },
+                'Already approved or conflict'
+              );
+            }
+            break;
+          default:
+            log.error({ pr: pr.id, res: response }, response.body);
+            break;
+        }
+      } catch (error) {
+        log.error(error, { pr: pr.id });
       }
-    } catch (error) {
-      log.error(error, { pr: pr.id });
     }
   }
 }
