@@ -7,9 +7,9 @@ LABEL \
 
 WORKDIR /opt/app
 
-COPY package.json package-lock.json ./
+COPY package.json ./
 
-RUN npm install --production
+RUN npm install --omit=dev --no-package-lock
 
 COPY index.js .
 

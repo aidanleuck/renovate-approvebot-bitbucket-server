@@ -1,4 +1,4 @@
 {
-  "presets": [["@babel/preset-env", { "node": "current" }]],
+  "presets": [["@babel/preset-env", { "targets": { "node": "current" } }]],
   "plugins": ["rewire"]
 }

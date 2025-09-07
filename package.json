@@ -38,6 +38,7 @@
     "got": "11.8.6"
   },
   "devDependencies": {
+    "@babel/preset-env": "7.26.0",
     "@semantic-release/exec": "7.1.0",
     "babel-plugin-rewire": "1.2.0",
     "conventional-changelog-conventionalcommits": "8.0.0",
