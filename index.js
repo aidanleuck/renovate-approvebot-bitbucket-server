@@ -1,7 +1,7 @@
 const bunyan = require('bunyan');
 const got = require('got');
 
-const { BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, RENOVATE_BOT_USER, DRY_RUN } =
+const { BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, BITBUCKET_PROJECTS, RENOVATE_BOT_USER, DRY_RUN } =
   process.env;
 const MANUAL_MERGE_MESSAGE = 'merge this manually';
 const AUTO_MERGE_MESSAGE = '**Automerge**: Enabled.';
@@ -37,39 +37,31 @@ function isAutomerging(pr) {
   }
 }
 
-async function getAllProjects() {
-  const projectsEndpoint = 'projects';
-  log.info(
-    'Requesting projects from %s%s...',
-    DEFAULT_OPTIONS.prefixUrl,
-    projectsEndpoint
-  );
-
-  try {
-    const response = await got(projectsEndpoint, {
-      ...DEFAULT_OPTIONS,
-      searchParams: {
-        limit: 1000, // Get all projects
-      },
-    });
-
-    return response.body.values || [];
-  } catch (error) {
-    log.error(error, 'Failed to get projects');
-    throw error;
-  }
-}
-
 async function getAllRepositories() {
   try {
-    const projects = await getAllProjects();
-    log.info(`Found ${projects.length} projects`);
+    // Parse the BITBUCKET_PROJECTS environment variable
+    let projectKeys = [];
+    if (BITBUCKET_PROJECTS) {
+      try {
+        // Try parsing as JSON array first
+        projectKeys = JSON.parse(BITBUCKET_PROJECTS);
+      } catch (error) {
+        // If not JSON, treat as comma-separated string
+        projectKeys = BITBUCKET_PROJECTS.split(',').map(key => key.trim()).filter(key => key);
+      }
+    }
+
+    if (!projectKeys || projectKeys.length === 0) {
+      throw new Error('BITBUCKET_PROJECTS environment variable must contain at least one project key');
+    }
+
+    log.info(`Configured to manage projects: ${projectKeys.join(', ')}`);
 
     const allRepositories = [];
 
     // eslint-disable-next-line no-await-in-loop
-    for (const project of projects) {
-      const reposEndpoint = `projects/${project.key}/repos`;
+    for (const projectKey of projectKeys) {
+      const reposEndpoint = `projects/${projectKey}/repos`;
       log.info(
         'Requesting repositories from %s%s...',
         DEFAULT_OPTIONS.prefixUrl,
@@ -87,14 +79,14 @@ async function getAllRepositories() {
 
         const repositories = (response.body.values || []).map((repo) => ({
           ...repo,
-          projectKey: project.key,
+          projectKey,
         }));
 
         allRepositories.push(...repositories);
       } catch (error) {
         log.error(
           error,
-          `Failed to get repositories for project ${project.key}`
+          `Failed to get repositories for project ${projectKey}`
         );
         // Continue with other projects even if one fails
       }
@@ -149,7 +141,7 @@ async function getPullRequestsForRepo(projectKey, repoSlug) {
 async function getPullRequests() {
   try {
     const repositories = await getAllRepositories();
-    log.info(`Found ${repositories.length} repositories across all projects`);
+    log.info(`Found ${repositories.length} repositories across configured projects`);
 
     const allPullRequests = [];
 
@@ -189,9 +181,9 @@ function approvePullRequest(pr) {
 }
 
 async function main() {
-  if (!BITBUCKET_SERVER_URL || !BITBUCKET_TOKEN || !RENOVATE_BOT_USER) {
+  if (!BITBUCKET_SERVER_URL || !BITBUCKET_TOKEN || !BITBUCKET_PROJECTS || !RENOVATE_BOT_USER) {
     log.fatal(
-      'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, RENOVATE_BOT_USER environment variables is not set.'
+      'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, BITBUCKET_PROJECTS, RENOVATE_BOT_USER environment variables is not set.'
     );
     process.exit(1);
   }
@@ -271,7 +263,6 @@ if (require.main === module) {
 
 module.exports = {
   isAutomerging,
-  getAllProjects,
   getAllRepositories,
   getPullRequestsForRepo,
   getPullRequests,
