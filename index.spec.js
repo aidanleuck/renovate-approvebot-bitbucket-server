@@ -267,12 +267,15 @@ describe('approvePullRequest', () => {
     };
 
     nock(API_BASE_URL)
-      .post(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/approve`
+      .put(
+        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
-        user: { name: 'approve-bot' },
+        user: { name: RENOVATE_BOT_USER },
+        role: 'REVIEWER',
+        approved: true,
+        status: 'APPROVED',
       });
 
     const response = await bot.approvePullRequest(pr);
@@ -288,8 +291,8 @@ describe('approvePullRequest', () => {
     };
 
     nock(API_BASE_URL)
-      .post(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/2/approve`
+      .put(
+        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/2/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(409, {
@@ -398,11 +401,16 @@ describe('main with dry run', () => {
 
     // Mock approval endpoint - this should be called in normal mode
     nock(API_BASE_URL)
-      .post(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/approve`
+      .put(
+        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, { user: { name: 'approve-bot' } });
+      .reply(200, {
+        user: { name: RENOVATE_BOT_USER },
+        role: 'REVIEWER',
+        approved: true,
+        status: 'APPROVED',
+      });
 
     await bot.main();
 
@@ -442,11 +450,16 @@ describe('main with dry run', () => {
 
     // Mock approval endpoint - this should be called in normal mode
     nock(API_BASE_URL)
-      .post(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/approve`
+      .put(
+        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, { user: { name: 'approve-bot' } });
+      .reply(200, {
+        user: { name: RENOVATE_BOT_USER },
+        role: 'REVIEWER',
+        approved: true,
+        status: 'APPROVED',
+      });
 
     await bot.main();
 

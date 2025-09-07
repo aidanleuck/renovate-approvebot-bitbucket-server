@@ -131,11 +131,19 @@ async function getPullRequests() {
 }
 
 function approvePullRequest(pr) {
-  const approveEndpoint = `projects/${pr.projectKey}/repos/${pr.repoSlug}/pull-requests/${pr.id}/approve`;
+  const participantsEndpoint = `projects/${pr.projectKey}/repos/${pr.repoSlug}/pull-requests/${pr.id}/participants/${RENOVATE_BOT_USER}`;
 
-  return got(approveEndpoint, {
+  return got(participantsEndpoint, {
     ...DEFAULT_OPTIONS,
-    method: 'POST',
+    method: 'PUT',
+    json: {
+      user: {
+        name: RENOVATE_BOT_USER,
+      },
+      role: 'REVIEWER',
+      approved: true,
+      status: 'APPROVED',
+    },
     throwHttpErrors: false,
   });
 }
