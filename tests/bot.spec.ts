@@ -43,8 +43,7 @@ function clearEnvironment(): void {
 }
 
 function getBotInstance(): typeof botModule {
-  // Reset modules to get a fresh instance with current environment
-  jest.resetModules();
+  // With resetModules: true in jest.config.js, we don't need to manually reset modules
   // eslint-disable-next-line @typescript-eslint/no-unsafe-return
   return jest.requireActual<typeof botModule>('../src/bot');
 }
