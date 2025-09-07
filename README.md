@@ -10,7 +10,7 @@ For GitHub, see [renovatebot/renovate-approve-bot](https://github.com/renovatebo
 On each run, the bot will:
 
 1. Get all projects accessible to the bot user
-2. Get all repositories in those projects  
+2. Get all repositories in those projects
 3. Get all open PRs from the Renovate Bot user in those repositories
 4. Filter out PRs where "automerge" is disabled
 5. Approve the "automerge" PRs
