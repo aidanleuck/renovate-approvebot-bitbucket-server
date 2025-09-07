@@ -1,0 +1,12 @@
+{
+  "extends": ["config:base"],
+  "packageRules": [
+    {
+      "groupName": "Test dependencies",
+      "matchDepTypes": ["devDependencies"],
+      "schedule": ["before 3am on Monday"]
+    }
+  ],
+  "automerge": true,
+  "platformAutomerge": true
+}
