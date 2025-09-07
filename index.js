@@ -1,8 +1,14 @@
 const bunyan = require('bunyan');
 const got = require('got');
 
-const { BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, BITBUCKET_PROJECTS, RENOVATE_BOT_USER, DRY_RUN } =
-  process.env;
+const {
+  BITBUCKET_SERVER_URL,
+  BITBUCKET_TOKEN,
+  BITBUCKET_PROJECTS,
+  RENOVATE_BOT_USER,
+  PR_AUTHOR_USER,
+  DRY_RUN,
+} = process.env;
 const MANUAL_MERGE_MESSAGE = 'merge this manually';
 const AUTO_MERGE_MESSAGE = '**Automerge**: Enabled.';
 
@@ -37,25 +43,72 @@ function isAutomerging(pr) {
   }
 }
 
-async function getAllRepositories() {
+async function getAllProjects() {
+  const projectsEndpoint = 'projects';
+  log.info(
+    'Autodiscovering projects from %s%s...',
+    DEFAULT_OPTIONS.prefixUrl,
+    projectsEndpoint
+  );
+
   try {
-    // Parse the BITBUCKET_PROJECTS environment variable
-    let projectKeys = [];
-    if (BITBUCKET_PROJECTS) {
-      try {
-        // Try parsing as JSON array first
-        projectKeys = JSON.parse(BITBUCKET_PROJECTS);
-      } catch (error) {
-        // If not JSON, treat as comma-separated string
-        projectKeys = BITBUCKET_PROJECTS.split(',').map(key => key.trim()).filter(key => key);
-      }
+    const response = await got(projectsEndpoint, {
+      ...DEFAULT_OPTIONS,
+      searchParams: {
+        limit: 1000, // Get all projects the user has access to
+      },
+    });
+
+    return response.body.values || [];
+  } catch (error) {
+    log.error(error, 'Failed to get projects');
+    throw error;
+  }
+}
+
+async function getProjectKeys() {
+  // Parse the BITBUCKET_PROJECTS environment variable if it exists
+  let projectKeys = [];
+  let shouldAutodiscover = true;
+
+  if (BITBUCKET_PROJECTS) {
+    try {
+      // Try parsing as JSON array first
+      projectKeys = JSON.parse(BITBUCKET_PROJECTS);
+    } catch (error) {
+  // If not JSON, treat as comma-separated string
+      projectKeys = BITBUCKET_PROJECTS.split(',')
+        .map((key) => key.trim())
+        .filter((key) => key);
     }
 
+    // If we have valid project keys, don't autodiscover
+    if (projectKeys && projectKeys.length > 0) {
+      shouldAutodiscover = false;
+      log.info(`Configured to manage projects: ${projectKeys.join(', ')}`);
+    }
+  }
+
+  // If no project keys or empty list, autodiscover all accessible projects
+  if (shouldAutodiscover) {
+    log.info('No projects specified, autodiscovering all accessible projects');
+    const projects = await getAllProjects();
+    projectKeys = projects.map((project) => project.key);
+    log.info(`Autodiscovered ${projectKeys.length} accessible projects`);
+  }
+
+  if (projectKeys.length === 0) {
+    throw new Error('No accessible projects found');
+  }
+
+  return projectKeys;
+}
+
+async function getAllRepositories(projectKeys) {
+  try {
     if (!projectKeys || projectKeys.length === 0) {
-      throw new Error('BITBUCKET_PROJECTS environment variable must contain at least one project key');
+      throw new Error('Project keys must be provided');
     }
-
-    log.info(`Configured to manage projects: ${projectKeys.join(', ')}`);
 
     const allRepositories = [];
 
@@ -118,9 +171,9 @@ async function getPullRequestsForRepo(projectKey, repoSlug) {
 
     const allPrs = response.body.values || [];
 
-    // Filter PRs by Renovate bot user and automerge status
+    // Filter PRs by PR author user and automerge status
     return allPrs
-      .filter((pr) => pr.author.user.name === RENOVATE_BOT_USER)
+      .filter((pr) => pr.author.user.name === PR_AUTHOR_USER)
       .filter((pr) => isAutomerging(pr))
       .map((pr) => ({
         id: pr.id,
@@ -140,8 +193,11 @@ async function getPullRequestsForRepo(projectKey, repoSlug) {
 
 async function getPullRequests() {
   try {
-    const repositories = await getAllRepositories();
-    log.info(`Found ${repositories.length} repositories across configured projects`);
+    const projectKeys = await getProjectKeys();
+    const repositories = await getAllRepositories(projectKeys);
+    log.info(
+      `Found ${repositories.length} repositories across all accessible projects`
+    );
 
     const allPullRequests = [];
 
@@ -153,7 +209,7 @@ async function getPullRequests() {
     }
 
     log.info(
-      `Found ${allPullRequests.length} automerge PRs from ${RENOVATE_BOT_USER}`
+      `Found ${allPullRequests.length} automerge PRs from ${PR_AUTHOR_USER}`
     );
     return allPullRequests;
   } catch (error) {
@@ -163,6 +219,7 @@ async function getPullRequests() {
 }
 
 function approvePullRequest(pr) {
+  // Use RENOVATE_BOT_USER for approvals
   const participantsEndpoint = `projects/${pr.projectKey}/repos/${pr.repoSlug}/pull-requests/${pr.id}/participants/${RENOVATE_BOT_USER}`;
 
   return got(participantsEndpoint, {
@@ -181,9 +238,21 @@ function approvePullRequest(pr) {
 }
 
 async function main() {
-  if (!BITBUCKET_SERVER_URL || !BITBUCKET_TOKEN || !BITBUCKET_PROJECTS || !RENOVATE_BOT_USER) {
+  if (!BITBUCKET_SERVER_URL || !BITBUCKET_TOKEN || !RENOVATE_BOT_USER) {
     log.fatal(
-      'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, BITBUCKET_PROJECTS, RENOVATE_BOT_USER environment variables is not set.'
+      'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, RENOVATE_BOT_USER environment variables is not set.'
+    );
+    process.exit(1);
+  }
+
+  if (!PR_AUTHOR_USER) {
+    log.fatal(
+      'PR_AUTHOR_USER environment variable is not set. This is the username that opens the PRs to be approved.'
+    );
+    process.exit(1);
+  } else if (PR_AUTHOR_USER === RENOVATE_BOT_USER) {
+    log.fatal(
+      'PR_AUTHOR_USER cannot be the same as RENOVATE_BOT_USER. Bitbucket Server does not allow users to approve their own PRs.'
     );
     process.exit(1);
   }
@@ -263,6 +332,8 @@ if (require.main === module) {
 
 module.exports = {
   isAutomerging,
+  getAllProjects,
+  getProjectKeys,
   getAllRepositories,
   getPullRequestsForRepo,
   getPullRequests,

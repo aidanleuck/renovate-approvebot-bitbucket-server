@@ -10,7 +10,7 @@ For GitHub, see [renovatebot/renovate-approve-bot](https://github.com/renovatebo
 On each run, the bot will:
 
 1. Get all repositories in the specified Bitbucket Server projects
-2. Get all open PRs from the Renovate Bot user in those repositories
+2. Get all open PRs from the PR_AUTHOR_USER in those repositories
 3. Filter out PRs where "automerge" is disabled
 4. Approve the "automerge" PRs
 
@@ -23,8 +23,9 @@ On each run, the bot will:
 5. Set the environment variables:
    - `BITBUCKET_SERVER_URL`: Base URL of your Bitbucket Server instance (e.g., `https://bitbucket.mycompany.com`)
    - `BITBUCKET_TOKEN`: Personal Access Token created in step 2
-   - `BITBUCKET_PROJECTS`: Array of Bitbucket Server project keys where repositories will be searched (JSON array or comma-separated string)
-   - `RENOVATE_BOT_USER`: Bitbucket Server username of your Renovate Bot
+   - `BITBUCKET_PROJECTS` (optional): Array of Bitbucket Server project keys where repositories will be searched (JSON array or comma-separated string). If not provided or empty, all projects accessible by the token will be autodiscovered
+   - `RENOVATE_BOT_USER`: Bitbucket Server username of your Renovate Bot (this user will approve PRs)
+   - `PR_AUTHOR_USER` (required): Bitbucket Server username that opens the PRs to be approved. Must be different from `RENOVATE_BOT_USER` because Bitbucket Server does not allow users to approve their own PRs.
    - `DRY_RUN` (optional): Set to `true` to enable dry run mode, which will only log what would be approved without making actual API calls
 6. Run the bot (on a schedule similarly to Renovate Bot, e.g. as a [Cron](https://en.wikipedia.org/wiki/Cron) job):
    - With Docker:
@@ -35,6 +36,7 @@ On each run, the bot will:
        --env BITBUCKET_TOKEN \
        --env BITBUCKET_PROJECTS \
        --env RENOVATE_BOT_USER \
+       --env PR_AUTHOR_USER \
        --env DRY_RUN \
        ghcr.io/aidanleuck/renovate-approve-bot-bitbucket-server:latest
      ```
@@ -60,6 +62,7 @@ export RENOVATE_BOT_USER="renovate-bot"
 ```
 
 The `BITBUCKET_PROJECTS` environment variable can be set as either:
+
 - A JSON array: `'["PROJ1", "PROJ2", "PROJ3"]'`
 - A comma-separated string: `"PROJ1,PROJ2,PROJ3"`
 

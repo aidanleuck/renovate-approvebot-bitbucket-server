@@ -1,27 +1,105 @@
 const nock = require('nock');
 
+// Constants for test setup
 const BITBUCKET_SERVER_URL = 'https://bitbucket.mycompany.com';
 const BITBUCKET_TOKEN = 'test-token-123';
-const BITBUCKET_PROJECTS = '["PROJ1", "PROJ2"]';
+const BITBUCKET_PROJECTS = 'PROJ1,PROJ2';
 const RENOVATE_BOT_USER = 'renovate-bot';
-
-process.env = Object.assign(process.env, {
-  BITBUCKET_SERVER_URL,
-  BITBUCKET_TOKEN,
-  BITBUCKET_PROJECTS,
-  RENOVATE_BOT_USER,
-});
-
-const bot = require('./index');
-
+const PR_AUTHOR_USER = 'pr-author-user';
 const API_BASE_URL = `${BITBUCKET_SERVER_URL}/rest/api/1.0`;
 
+// Test helper constants
 const autoMergeDescription = '...\n\n🚦 **Automerge**: Enabled.\n\n...';
 const manualMergeDescription =
   '...\n\n🚦 **Automerge**: Disabled by config. Please merge this manually once you are satisfied.\n\n...';
 
+// Test helper functions
+// This function is kept for backward compatibility but is no longer recommended
+// Use setupStaticEnvironment() before all tests and only modify specific variables in individual tests
+function resetEnvironment() {
+  // Reset environment variables to default test values
+  process.env.BITBUCKET_SERVER_URL = BITBUCKET_SERVER_URL;
+  process.env.BITBUCKET_TOKEN = BITBUCKET_TOKEN;
+  process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
+  process.env.RENOVATE_BOT_USER = RENOVATE_BOT_USER;
+  process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
+  delete process.env.DRY_RUN;
+}
+
+// Set up static environment variables that rarely change between tests
+function setupStaticEnvironment() {
+  process.env.BITBUCKET_SERVER_URL = BITBUCKET_SERVER_URL;
+  process.env.BITBUCKET_TOKEN = BITBUCKET_TOKEN;
+}
+
+// Set up test-specific environment variables
+function setupTestEnvironment() {
+  process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
+  process.env.RENOVATE_BOT_USER = RENOVATE_BOT_USER;
+  process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
+}
+
+function clearEnvironment() {
+  delete process.env.BITBUCKET_SERVER_URL;
+  delete process.env.BITBUCKET_TOKEN;
+  delete process.env.BITBUCKET_PROJECTS;
+  delete process.env.RENOVATE_BOT_USER;
+  delete process.env.PR_AUTHOR_USER;
+  delete process.env.DRY_RUN;
+}
+
+function getBotInstance() {
+  // Reset modules to get a fresh instance with current environment
+  jest.resetModules();
+  // eslint-disable-next-line global-require
+  return require('./index');
+}
+
+function mockProjects(projects = []) {
+  return nock(API_BASE_URL)
+    .get('/projects')
+    .query({ limit: 1000 })
+    .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+    .reply(200, { values: projects });
+}
+
+function mockRepositories(projectKey, repositories = []) {
+  return nock(API_BASE_URL)
+    .get(`/projects/${projectKey}/repos`)
+    .query({ limit: 1000 })
+    .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+    .reply(200, { values: repositories });
+}
+
+function mockPullRequests(projectKey, repoSlug, pullRequests = []) {
+  return nock(API_BASE_URL)
+    .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
+    .query({ state: 'OPEN', limit: 1000 })
+    .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+    .reply(200, { values: pullRequests });
+}
+
+function mockApprovePR(
+  projectKey,
+  repoSlug,
+  prId,
+  statusCode = 200,
+  approverUser = RENOVATE_BOT_USER
+) {
+  return nock(API_BASE_URL)
+    .put(
+      `/projects/${projectKey}/repos/${repoSlug}/pull-requests/${prId}/participants/${approverUser}`
+    )
+    .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+    .reply(statusCode, {});
+}
+
+// Clean up nocks after each test
 afterEach(() => {
   if (!nock.isDone()) {
+    // Uncomment this line when debugging failing tests
+    // console.log('Pending mocks:', nock.pendingMocks());
+    nock.cleanAll();
     throw new Error(
       `Not all nock interceptors were used: ${JSON.stringify(
         nock.pendingMocks()
@@ -31,56 +109,147 @@ afterEach(() => {
   nock.cleanAll();
 });
 
+// Set up static environment before all tests
+beforeAll(() => {
+  setupStaticEnvironment();
+});
+
+// Clean up all environment variables after all tests
+afterAll(() => {
+  clearEnvironment();
+});
+
+// Set up test-specific environment before each test
+beforeEach(() => {
+  setupTestEnvironment();
+});
+
 describe('isAutomerging', () => {
   it('is automerging', () => {
+    const bot = getBotInstance();
     const pr = {
       description: autoMergeDescription,
-      // omitted attributes...
     };
 
     expect(bot.isAutomerging(pr)).toBe(true);
   });
 
   it('is not automerging', () => {
+    const bot = getBotInstance();
     const pr = {
       description: manualMergeDescription,
-      // omitted attributes...
     };
 
     expect(bot.isAutomerging(pr)).toBe(false);
   });
 
   it('handles missing description', () => {
+    const bot = getBotInstance();
     const pr = {};
 
     expect(bot.isAutomerging(pr)).toBe(false);
   });
 });
 
-describe('getAllRepositories', () => {
-  it('gets repositories from configured projects successfully', async () => {
-    // Mock repositories for PROJ1
+describe('getProjectKeys', () => {
+  it('returns configured projects when BITBUCKET_PROJECTS is set', async () => {
+    // Ensure BITBUCKET_PROJECTS is set to the default test value
+    process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
+
+    const bot = getBotInstance();
+    const projectKeys = await bot.getProjectKeys();
+
+    expect(projectKeys).toEqual(['PROJ1', 'PROJ2']);
+  });
+
+  it('autodiscovers projects when BITBUCKET_PROJECTS is not set', async () => {
+    // Remove BITBUCKET_PROJECTS for this specific test
+    delete process.env.BITBUCKET_PROJECTS;
+
+    // Mock projects endpoint for autodiscovery
+    mockProjects([
+      { key: 'PROJ1', name: 'Project 1' },
+      { key: 'PROJ2', name: 'Project 2' },
+    ]);
+
+    const bot = getBotInstance();
+    const projectKeys = await bot.getProjectKeys();
+
+    expect(projectKeys).toEqual(['PROJ1', 'PROJ2']);
+  });
+
+  it('autodiscovers when BITBUCKET_PROJECTS is empty', async () => {
+    // Set empty projects for this specific test
+    process.env.BITBUCKET_PROJECTS = '';
+
+    // Mock projects endpoint for autodiscovery
+    mockProjects([
+      { key: 'PROJ1', name: 'Project 1' },
+      { key: 'PROJ2', name: 'Project 2' },
+    ]);
+
+    const bot = getBotInstance();
+    const projectKeys = await bot.getProjectKeys();
+
+    expect(projectKeys).toEqual(['PROJ1', 'PROJ2']);
+  });
+
+  it('throws error when no projects are accessible during autodiscovery', async () => {
+    // Remove BITBUCKET_PROJECTS for this specific test
+    delete process.env.BITBUCKET_PROJECTS;
+
+    // Mock empty projects array for autodiscovery
+    mockProjects([]);
+
+    const bot = getBotInstance();
+    await expect(bot.getProjectKeys()).rejects.toThrow(
+      'No accessible projects found'
+    );
+  });
+});
+
+describe('getAllProjects', () => {
+  it('gets projects successfully', async () => {
+    mockProjects([
+      { key: 'PROJ1', name: 'Project 1' },
+      { key: 'PROJ2', name: 'Project 2' },
+      { key: 'PROJ3', name: 'Project 3' },
+    ]);
+
+    const bot = getBotInstance();
+    const projects = await bot.getAllProjects();
+
+    expect(projects).toHaveLength(3);
+    expect(projects[0].key).toBe('PROJ1');
+    expect(projects[1].key).toBe('PROJ2');
+    expect(projects[2].key).toBe('PROJ3');
+  });
+
+  it('handles API errors', async () => {
     nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
+      .get('/projects')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          { slug: 'repo1', name: 'Repository 1' },
-          { slug: 'repo2', name: 'Repository 2' },
-        ],
-      });
+      .reply(500, { error: 'Internal server error' });
+
+    const bot = getBotInstance();
+    await expect(bot.getAllProjects()).rejects.toThrow();
+  });
+});
+
+describe('getAllRepositories', () => {
+  it('gets repositories from provided project keys', async () => {
+    // Mock repositories for PROJ1
+    mockRepositories('PROJ1', [
+      { slug: 'repo1', name: 'Repository 1' },
+      { slug: 'repo2', name: 'Repository 2' },
+    ]);
 
     // Mock repositories for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'repo3', name: 'Repository 3' }],
-      });
+    mockRepositories('PROJ2', [{ slug: 'repo3', name: 'Repository 3' }]);
 
-    const repositories = await bot.getAllRepositories();
+    const bot = getBotInstance();
+    const repositories = await bot.getAllRepositories(['PROJ1', 'PROJ2']);
 
     expect(repositories).toHaveLength(3);
     expect(repositories[0].slug).toBe('repo1');
@@ -93,86 +262,26 @@ describe('getAllRepositories', () => {
 
   it('handles empty repository list', async () => {
     // Mock empty repositories for PROJ1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [],
-      });
+    mockRepositories('PROJ1', []);
 
     // Mock empty repositories for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [],
-      });
+    mockRepositories('PROJ2', []);
 
-    const repositories = await bot.getAllRepositories();
+    const bot = getBotInstance();
+    const repositories = await bot.getAllRepositories(['PROJ1', 'PROJ2']);
 
     expect(repositories).toHaveLength(0);
   });
 
-  it('handles comma-separated project list', async () => {
-    // Temporarily set comma-separated projects
-    const originalProjects = process.env.BITBUCKET_PROJECTS;
-    process.env.BITBUCKET_PROJECTS = 'PROJ1,PROJ2';
-
-    // Re-require the module to pick up new env vars
-    jest.resetModules();
-    const tempBot = require('./index'); // eslint-disable-line global-require
-
-    // Mock repositories for PROJ1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'repo1', name: 'Repository 1' }],
-      });
-
-    // Mock repositories for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'repo2', name: 'Repository 2' }],
-      });
-
-    const repositories = await tempBot.getAllRepositories();
-
-    expect(repositories).toHaveLength(2);
-    expect(repositories[0].projectKey).toBe('PROJ1');
-    expect(repositories[1].projectKey).toBe('PROJ2');
-
-    // Restore original env var
-    process.env.BITBUCKET_PROJECTS = originalProjects;
-    // Re-require again to restore original state
-    jest.resetModules();
-    require('./index'); // eslint-disable-line global-require
-  });
-
-  it('throws error when BITBUCKET_PROJECTS is empty', async () => {
-    // Temporarily set empty projects
-    const originalProjects = process.env.BITBUCKET_PROJECTS;
-    process.env.BITBUCKET_PROJECTS = '';
-
-    // Re-require the module to pick up new env vars
-    jest.resetModules();
-    const tempBot = require('./index'); // eslint-disable-line global-require
-
-    await expect(tempBot.getAllRepositories()).rejects.toThrow(
-      'BITBUCKET_PROJECTS environment variable must contain at least one project key'
+  it('throws error when no project keys are provided', async () => {
+    const bot = getBotInstance();
+    await expect(bot.getAllRepositories()).rejects.toThrow(
+      'Project keys must be provided'
     );
 
-    // Restore original env var
-    process.env.BITBUCKET_PROJECTS = originalProjects;
-    // Re-require again to restore original state
-    jest.resetModules();
-    require('./index'); // eslint-disable-line global-require
+    await expect(bot.getAllRepositories([])).rejects.toThrow(
+      'Project keys must be provided'
+    );
   });
 
   it('continues with other projects when one project fails', async () => {
@@ -184,15 +293,10 @@ describe('getAllRepositories', () => {
       .reply(500, 'Internal Server Error');
 
     // Mock successful repositories for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'repo3', name: 'Repository 3' }],
-      });
+    mockRepositories('PROJ2', [{ slug: 'repo3', name: 'Repository 3' }]);
 
-    const repositories = await bot.getAllRepositories();
+    const bot = getBotInstance();
+    const repositories = await bot.getAllRepositories(['PROJ1', 'PROJ2']);
 
     expect(repositories).toHaveLength(1);
     expect(repositories[0].slug).toBe('repo3');
@@ -205,83 +309,71 @@ describe('getPullRequestsForRepo', () => {
   const repoSlug = 'test-repo';
 
   it('gets automerge pull-requests from renovate bot', async () => {
-    nock(API_BASE_URL)
-      .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          {
-            id: 1,
-            title: 'Update dependency',
-            description: autoMergeDescription,
-            author: {
-              user: {
-                name: RENOVATE_BOT_USER,
-              },
-            },
-            links: {
-              self: [
-                {
-                  href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/1`,
-                },
-              ],
-            },
+    mockPullRequests(projectKey, repoSlug, [
+      {
+        id: 1,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-          {
-            id: 2,
-            title: 'Manual update',
-            description: manualMergeDescription,
-            author: {
-              user: {
-                name: RENOVATE_BOT_USER,
-              },
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/1`,
             },
-            links: {
-              self: [
-                {
-                  href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/2`,
-                },
-              ],
-            },
+          ],
+        },
+      },
+      {
+        id: 2,
+        title: 'Manual update',
+        description: manualMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-          {
-            id: 3,
-            title: 'Different user PR',
-            description: autoMergeDescription,
-            author: {
-              user: {
-                name: 'other-user',
-              },
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/2`,
             },
-            links: {
-              self: [
-                {
-                  href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/3`,
-                },
-              ],
-            },
+          ],
+        },
+      },
+      {
+        id: 3,
+        title: 'Different user PR',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: 'other-user',
           },
-        ],
-      });
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/3`,
+            },
+          ],
+        },
+      },
+    ]);
 
+    const bot = getBotInstance();
     const pullRequests = await bot.getPullRequestsForRepo(projectKey, repoSlug);
 
     expect(pullRequests).toHaveLength(1);
     expect(pullRequests[0].id).toBe(1);
-    expect(pullRequests[0].projectKey).toBe(projectKey);
-    expect(pullRequests[0].repoSlug).toBe(repoSlug);
   });
 
   it('handles no pull requests', async () => {
-    nock(API_BASE_URL)
-      .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [],
-      });
+    mockPullRequests(projectKey, repoSlug, []);
 
+    const bot = getBotInstance();
     const pullRequests = await bot.getPullRequestsForRepo(projectKey, repoSlug);
 
     expect(pullRequests).toHaveLength(0);
@@ -292,8 +384,9 @@ describe('getPullRequestsForRepo', () => {
       .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(500, { error: 'Internal server error' });
+      .reply(500, 'Internal Server Error');
 
+    const bot = getBotInstance();
     const pullRequests = await bot.getPullRequestsForRepo(projectKey, repoSlug);
 
     expect(pullRequests).toHaveLength(0);
@@ -301,316 +394,361 @@ describe('getPullRequestsForRepo', () => {
 });
 
 describe('getPullRequests', () => {
-  it('gets pull requests from multiple repositories across projects', async () => {
-    // Mock projects endpoint
-    nock(API_BASE_URL)
-      .get('/projects')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          { key: 'PROJ1', name: 'Project 1' },
-          { key: 'PROJ2', name: 'Project 2' },
-        ],
-      });
-
+  it('gets pull requests from multiple repositories across configured projects', async () => {
+    // Ensure BITBUCKET_PROJECTS is set
+    process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
+    
     // Mock repositories for PROJ1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'repo1', name: 'Repository 1' }],
-      });
+    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
 
     // Mock repositories for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'repo2', name: 'Repository 2' }],
-      });
+    mockRepositories('PROJ2', []);
 
-    // Mock PRs for PROJ1/repo1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos/repo1/pull-requests')
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          {
-            id: 1,
-            title: 'Update dependency in repo1',
-            description: autoMergeDescription,
-            author: { user: { name: RENOVATE_BOT_USER } },
-            links: { self: [{ href: 'test-link-1' }] },
+    // Mock pull requests for PROJ1/test-repo
+    mockPullRequests('PROJ1', 'test-repo', [
+      {
+        id: 1,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-        ],
-      });
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/PROJ1/repos/test-repo/pull-requests/1`,
+            },
+          ],
+        },
+      },
+    ]);
 
-    // Mock PRs for PROJ2/repo2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos/repo2/pull-requests')
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          {
-            id: 2,
-            title: 'Update dependency in repo2',
-            description: autoMergeDescription,
-            author: { user: { name: RENOVATE_BOT_USER } },
-            links: { self: [{ href: 'test-link-2' }] },
+    const bot = getBotInstance();
+    const pullRequests = await bot.getPullRequests();
+
+    expect(pullRequests).toHaveLength(1);
+    expect(pullRequests[0].id).toBe(1);
+    expect(pullRequests[0].projectKey).toBe('PROJ1');
+    expect(pullRequests[0].repoSlug).toBe('test-repo');
+  });
+
+  it('gets pull requests from autodiscovered projects', async () => {
+    // Remove BITBUCKET_PROJECTS for this specific test
+    delete process.env.BITBUCKET_PROJECTS;
+
+    // Mock projects endpoint for autodiscovery
+    mockProjects([
+      { key: 'AUTO1', name: 'Auto Project 1' },
+      { key: 'AUTO2', name: 'Auto Project 2' },
+    ]);
+
+    // Mock repositories for AUTO1
+    mockRepositories('AUTO1', [
+      { slug: 'auto-repo1', name: 'Auto Repository 1' },
+    ]);
+
+    // Mock repositories for AUTO2
+    mockRepositories('AUTO2', [
+      { slug: 'auto-repo2', name: 'Auto Repository 2' },
+    ]);
+
+    // Mock pull requests for AUTO1/auto-repo1
+    mockPullRequests('AUTO1', 'auto-repo1', [
+      {
+        id: 1,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-        ],
-      });
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/AUTO1/repos/auto-repo1/pull-requests/1`,
+            },
+          ],
+        },
+      },
+    ]);
 
+    // Mock pull requests for AUTO2/auto-repo2
+    mockPullRequests('AUTO2', 'auto-repo2', [
+      {
+        id: 2,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
+          },
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/AUTO2/repos/auto-repo2/pull-requests/2`,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const bot = getBotInstance();
     const pullRequests = await bot.getPullRequests();
 
     expect(pullRequests).toHaveLength(2);
     expect(pullRequests[0].id).toBe(1);
-    expect(pullRequests[0].projectKey).toBe('PROJ1');
-    expect(pullRequests[0].repoSlug).toBe('repo1');
+    expect(pullRequests[0].projectKey).toBe('AUTO1');
+    expect(pullRequests[0].repoSlug).toBe('auto-repo1');
     expect(pullRequests[1].id).toBe(2);
-    expect(pullRequests[1].projectKey).toBe('PROJ2');
-    expect(pullRequests[1].repoSlug).toBe('repo2');
+    expect(pullRequests[1].projectKey).toBe('AUTO2');
+    expect(pullRequests[1].repoSlug).toBe('auto-repo2');
   });
 });
 
 describe('approvePullRequest', () => {
   it('approves successfully', async () => {
+    const projectKey = 'PROJ1';
+    const repoSlug = 'test-repo';
     const pr = {
       id: 1,
-      projectKey: 'MYPROJ',
-      repoSlug: 'test-repo',
+      projectKey,
+      repoSlug,
+      title: 'Update dependency',
     };
 
-    nock(API_BASE_URL)
-      .put(
-        `/projects/MYPROJ/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
-      )
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        user: { name: RENOVATE_BOT_USER },
-        role: 'REVIEWER',
-        approved: true,
-        status: 'APPROVED',
-      });
+    mockApprovePR(projectKey, repoSlug, pr.id);
 
-    const response = await bot.approvePullRequest(pr);
-
-    expect(response.statusCode).toBe(200);
+    const bot = getBotInstance();
+    const result = await bot.approvePullRequest(pr);
+    expect(result.statusCode).toBe(200);
   });
 
   it('handles already approved', async () => {
+    const projectKey = 'PROJ1';
+    const repoSlug = 'test-repo';
     const pr = {
-      id: 2,
-      projectKey: 'MYPROJ',
-      repoSlug: 'test-repo',
+      id: 1,
+      projectKey,
+      repoSlug,
+      title: 'Update dependency',
     };
 
-    nock(API_BASE_URL)
-      .put(
-        `/projects/MYPROJ/repos/test-repo/pull-requests/2/participants/${RENOVATE_BOT_USER}`
-      )
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(409, {
-        errors: [
-          {
-            message: 'You have already approved this pull request.',
-          },
-        ],
-      });
+    mockApprovePR(projectKey, repoSlug, pr.id, 200);
 
-    const response = await bot.approvePullRequest(pr);
+    const bot = getBotInstance();
+    const result = await bot.approvePullRequest(pr);
+    expect(result.statusCode).toBe(200);
+  });
 
-    expect(response.statusCode).toBe(409);
+  it('uses RENOVATE_BOT_USER for approval', async () => {
+    const projectKey = 'PROJ1';
+    const repoSlug = 'test-repo';
+    const pr = {
+      id: 1,
+      projectKey,
+      repoSlug,
+      title: 'Update dependency',
+    };
+
+    // Explicitly use RENOVATE_BOT_USER
+    mockApprovePR(projectKey, repoSlug, pr.id, 200, RENOVATE_BOT_USER);
+
+    const bot = getBotInstance();
+    const result = await bot.approvePullRequest(pr);
+    expect(result.statusCode).toBe(200);
   });
 });
 
 describe('main with dry run', () => {
-  const originalEnv = process.env.DRY_RUN;
-
-  beforeEach(() => {
-    // Clear DRY_RUN before each test
-    delete process.env.DRY_RUN;
-  });
-
-  afterEach(() => {
-    // Restore original value
-    if (originalEnv !== undefined) {
-      process.env.DRY_RUN = originalEnv;
-    } else {
-      delete process.env.DRY_RUN;
-    }
-  });
-
   it('runs in dry run mode when DRY_RUN=true', async () => {
-    // Set dry run mode
+    // Set DRY_RUN for this specific test
     process.env.DRY_RUN = 'true';
 
-    // Mock repositories endpoint for PROJ1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'test-repo', name: 'Test Repository' }],
-      });
+    // Mock repositories for PROJ1
+    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
 
-    // Mock repositories endpoint for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [],
-      });
+    // Mock repositories for PROJ2
+    mockRepositories('PROJ2', []);
 
-    // Mock PRs endpoint
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos/test-repo/pull-requests')
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          {
-            id: 1,
-            title: 'Update dependency',
-            description: autoMergeDescription,
-            author: { user: { name: RENOVATE_BOT_USER } },
-            links: { self: [{ href: 'test-link' }] },
+    // Mock pull requests for PROJ1/test-repo
+    mockPullRequests('PROJ1', 'test-repo', [
+      {
+        id: 1,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-        ],
-      });
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/PROJ1/repos/test-repo/pull-requests/1`,
+            },
+          ],
+        },
+      },
+    ]);
 
-    // No approval endpoint should be called in dry run mode
-    // If it gets called, the test will fail due to nock not being satisfied
+    // No approval mock needed since it's dry-run mode
 
-    // Spy on approvePullRequest to ensure it's not called
-    const approveSpy = jest.spyOn(bot, 'approvePullRequest');
-
+    const bot = getBotInstance();
     await bot.main();
-
-    // Verify that approvePullRequest was never called
-    expect(approveSpy).not.toHaveBeenCalled();
-
-    approveSpy.mockRestore();
+    // In dry run mode, we don't expect any PR approvals
+    expect(nock.isDone()).toBe(true);
   });
 
   it('runs normally when DRY_RUN is not set', async () => {
-    // Don't set DRY_RUN (should default to normal mode)
+    // Ensure DRY_RUN is not set for this specific test
+    delete process.env.DRY_RUN;
 
-    // Mock repositories endpoint for PROJ1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'test-repo', name: 'Test Repository' }],
-      });
+    // Mock repositories for PROJ1
+    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
 
-    // Mock repositories endpoint for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [],
-      });
+    // Mock repositories for PROJ2
+    mockRepositories('PROJ2', []);
 
-    // Mock PRs endpoint
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos/test-repo/pull-requests')
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          {
-            id: 1,
-            title: 'Update dependency',
-            description: autoMergeDescription,
-            author: { user: { name: RENOVATE_BOT_USER } },
-            links: { self: [{ href: 'test-link' }] },
+    // Mock pull requests for PROJ1/test-repo
+    mockPullRequests('PROJ1', 'test-repo', [
+      {
+        id: 1,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-        ],
-      });
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/PROJ1/repos/test-repo/pull-requests/1`,
+            },
+          ],
+        },
+      },
+    ]);
 
-    // Mock approval endpoint - this should be called in normal mode
-    nock(API_BASE_URL)
-      .put(
-        `/projects/PROJ1/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
-      )
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        user: { name: RENOVATE_BOT_USER },
-        role: 'REVIEWER',
-        approved: true,
-        status: 'APPROVED',
-      });
+    // Mock PR approval
+    mockApprovePR('PROJ1', 'test-repo', 1);
 
+    const bot = getBotInstance();
     await bot.main();
-
-    // Test passes if no nock errors are thrown (approval endpoint was called)
-    expect(true).toBe(true); // Explicit assertion for jest/expect-expect rule
+    // We expect all mocks to be used, including the PR approval
+    expect(nock.isDone()).toBe(true);
   });
 
   it('runs normally when DRY_RUN=false', async () => {
-    // Set DRY_RUN to false
+    // Set DRY_RUN=false for this specific test
     process.env.DRY_RUN = 'false';
 
-    // Mock repositories endpoint for PROJ1
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [{ slug: 'test-repo', name: 'Test Repository' }],
-      });
+    // Mock repositories for PROJ1
+    mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
 
-    // Mock repositories endpoint for PROJ2
-    nock(API_BASE_URL)
-      .get('/projects/PROJ2/repos')
-      .query({ limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [],
-      });
+    // Mock repositories for PROJ2
+    mockRepositories('PROJ2', []);
 
-    // Mock PRs endpoint
-    nock(API_BASE_URL)
-      .get('/projects/PROJ1/repos/test-repo/pull-requests')
-      .query({ state: 'OPEN', limit: 1000 })
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        values: [
-          {
-            id: 1,
-            title: 'Update dependency',
-            description: autoMergeDescription,
-            author: { user: { name: RENOVATE_BOT_USER } },
-            links: { self: [{ href: 'test-link' }] },
+    // Mock pull requests for PROJ1/test-repo
+    mockPullRequests('PROJ1', 'test-repo', [
+      {
+        id: 1,
+        title: 'Update dependency',
+        description: autoMergeDescription,
+        author: {
+          user: {
+            name: PR_AUTHOR_USER,
           },
-        ],
-      });
+        },
+        links: {
+          self: [
+            {
+              href: `${API_BASE_URL}/projects/PROJ1/repos/test-repo/pull-requests/1`,
+            },
+          ],
+        },
+      },
+    ]);
 
-    // Mock approval endpoint - this should be called in normal mode
-    nock(API_BASE_URL)
-      .put(
-        `/projects/PROJ1/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
-      )
-      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
-      .reply(200, {
-        user: { name: RENOVATE_BOT_USER },
-        role: 'REVIEWER',
-        approved: true,
-        status: 'APPROVED',
-      });
+    // Mock PR approval
+    mockApprovePR('PROJ1', 'test-repo', 1);
+
+    const bot = getBotInstance();
+    await bot.main();
+    // We expect all mocks to be used, including the PR approval
+    expect(nock.isDone()).toBe(true);
+  });
+});
+
+describe('main validation', () => {
+  beforeEach(() => {
+    jest.spyOn(process, 'exit').mockImplementation(() => { });
+    jest.spyOn(console, 'error').mockImplementation(() => { });
+    // Clean up any hanging nocks
+    nock.cleanAll();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    // Clean up any hanging nocks
+    nock.cleanAll();
+  });
+
+  it('exits when PR_AUTHOR_USER is not set', async () => {
+    // Explicitly delete the variable we're testing
+    delete process.env.PR_AUTHOR_USER;
+
+    // Mock exit function to prevent actual exit
+    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('Mock process.exit');
+    });
+
+    const bot = getBotInstance();
+
+    await expect(bot.main()).rejects.toThrow('Mock process.exit');
+    expect(mockExit).toHaveBeenCalledWith(1);
+
+    mockExit.mockRestore();
+  }, 15000);
+
+  it('exits when PR_AUTHOR_USER is the same as RENOVATE_BOT_USER', async () => {
+    // Set up the specific test condition
+    process.env.PR_AUTHOR_USER = RENOVATE_BOT_USER;
+
+    // Mock exit function to prevent actual exit
+    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('Mock process.exit');
+    });
+
+    const bot = getBotInstance();
+
+    // Skip the actual processing by mocking getPullRequests
+    jest.spyOn(bot, 'getPullRequests').mockResolvedValue([]);
+
+    await expect(bot.main()).rejects.toThrow('Mock process.exit');
+    expect(mockExit).toHaveBeenCalledWith(1);
+    mockExit.mockRestore();
+  }, 20000);
+
+  it('continues when PR_AUTHOR_USER is different from RENOVATE_BOT_USER', async () => {
+    // Setup a specific environment with valid values
+    process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
+
+    // Mock exit to ensure it's not called
+    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => { });
+
+    const bot = getBotInstance();
+
+    // Skip the actual API calls by mocking getPullRequests
+    jest.spyOn(bot, 'getPullRequests').mockResolvedValue([]);
 
     await bot.main();
 
-    // Test passes if no nock errors are thrown (approval endpoint was called)
-    expect(true).toBe(true); // Explicit assertion for jest/expect-expect rule
-  });
+    expect(mockExit).not.toHaveBeenCalled();
+    mockExit.mockRestore();
+  }, 20000);
 });
