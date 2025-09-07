@@ -2,13 +2,11 @@ const nock = require('nock');
 
 const BITBUCKET_SERVER_URL = 'https://bitbucket.mycompany.com';
 const BITBUCKET_TOKEN = 'test-token-123';
-const BITBUCKET_PROJECT = 'MYPROJ';
 const RENOVATE_BOT_USER = 'renovate-bot';
 
 process.env = Object.assign(process.env, {
   BITBUCKET_SERVER_URL,
   BITBUCKET_TOKEN,
-  BITBUCKET_PROJECT,
   RENOVATE_BOT_USER,
 });
 
@@ -57,10 +55,58 @@ describe('isAutomerging', () => {
   });
 });
 
-describe('getAllRepositories', () => {
-  it('gets repositories successfully', async () => {
+describe('getAllProjects', () => {
+  it('gets projects successfully', async () => {
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos`)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [
+          { key: 'PROJ1', name: 'Project 1' },
+          { key: 'PROJ2', name: 'Project 2' },
+        ],
+      });
+
+    const projects = await bot.getAllProjects();
+
+    expect(projects).toHaveLength(2);
+    expect(projects[0].key).toBe('PROJ1');
+    expect(projects[1].key).toBe('PROJ2');
+  });
+
+  it('handles empty project list', async () => {
+    nock(API_BASE_URL)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [],
+      });
+
+    const projects = await bot.getAllProjects();
+
+    expect(projects).toHaveLength(0);
+  });
+});
+
+describe('getAllRepositories', () => {
+  it('gets repositories from multiple projects successfully', async () => {
+    // Mock projects endpoint
+    nock(API_BASE_URL)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [
+          { key: 'PROJ1', name: 'Project 1' },
+          { key: 'PROJ2', name: 'Project 2' },
+        ],
+      });
+
+    // Mock repositories for PROJ1
+    nock(API_BASE_URL)
+      .get('/projects/PROJ1/repos')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -70,16 +116,39 @@ describe('getAllRepositories', () => {
         ],
       });
 
+    // Mock repositories for PROJ2
+    nock(API_BASE_URL)
+      .get('/projects/PROJ2/repos')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ slug: 'repo3', name: 'Repository 3' }],
+      });
+
     const repositories = await bot.getAllRepositories();
 
-    expect(repositories).toHaveLength(2);
+    expect(repositories).toHaveLength(3);
     expect(repositories[0].slug).toBe('repo1');
+    expect(repositories[0].projectKey).toBe('PROJ1');
     expect(repositories[1].slug).toBe('repo2');
+    expect(repositories[1].projectKey).toBe('PROJ1');
+    expect(repositories[2].slug).toBe('repo3');
+    expect(repositories[2].projectKey).toBe('PROJ2');
   });
 
   it('handles empty repository list', async () => {
+    // Mock projects endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos`)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ key: 'PROJ1', name: 'Project 1' }],
+      });
+
+    // Mock empty repositories for PROJ1
+    nock(API_BASE_URL)
+      .get('/projects/PROJ1/repos')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -90,14 +159,51 @@ describe('getAllRepositories', () => {
 
     expect(repositories).toHaveLength(0);
   });
+
+  it('continues with other projects when one project fails', async () => {
+    // Mock projects endpoint
+    nock(API_BASE_URL)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [
+          { key: 'PROJ1', name: 'Project 1' },
+          { key: 'PROJ2', name: 'Project 2' },
+        ],
+      });
+
+    // Mock failing repositories for PROJ1
+    nock(API_BASE_URL)
+      .get('/projects/PROJ1/repos')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(500, { error: 'Internal server error' });
+
+    // Mock successful repositories for PROJ2
+    nock(API_BASE_URL)
+      .get('/projects/PROJ2/repos')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ slug: 'repo3', name: 'Repository 3' }],
+      });
+
+    const repositories = await bot.getAllRepositories();
+
+    expect(repositories).toHaveLength(1);
+    expect(repositories[0].slug).toBe('repo3');
+    expect(repositories[0].projectKey).toBe('PROJ2');
+  });
 });
 
 describe('getPullRequestsForRepo', () => {
+  const projectKey = 'MYPROJ';
   const repoSlug = 'test-repo';
 
   it('gets automerge pull-requests from renovate bot', async () => {
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/${repoSlug}/pull-requests`)
+      .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -114,7 +220,7 @@ describe('getPullRequestsForRepo', () => {
             links: {
               self: [
                 {
-                  href: `${API_BASE_URL}/projects/${BITBUCKET_PROJECT}/repos/${repoSlug}/pull-requests/1`,
+                  href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/1`,
                 },
               ],
             },
@@ -131,7 +237,7 @@ describe('getPullRequestsForRepo', () => {
             links: {
               self: [
                 {
-                  href: `${API_BASE_URL}/projects/${BITBUCKET_PROJECT}/repos/${repoSlug}/pull-requests/2`,
+                  href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/2`,
                 },
               ],
             },
@@ -148,7 +254,7 @@ describe('getPullRequestsForRepo', () => {
             links: {
               self: [
                 {
-                  href: `${API_BASE_URL}/projects/${BITBUCKET_PROJECT}/repos/${repoSlug}/pull-requests/3`,
+                  href: `${API_BASE_URL}/projects/${projectKey}/repos/${repoSlug}/pull-requests/3`,
                 },
               ],
             },
@@ -156,67 +262,76 @@ describe('getPullRequestsForRepo', () => {
         ],
       });
 
-    const pullRequests = await bot.getPullRequestsForRepo(
-      BITBUCKET_PROJECT,
-      repoSlug
-    );
+    const pullRequests = await bot.getPullRequestsForRepo(projectKey, repoSlug);
 
     expect(pullRequests).toHaveLength(1);
     expect(pullRequests[0].id).toBe(1);
-    expect(pullRequests[0].projectKey).toBe(BITBUCKET_PROJECT);
+    expect(pullRequests[0].projectKey).toBe(projectKey);
     expect(pullRequests[0].repoSlug).toBe(repoSlug);
   });
 
   it('handles no pull requests', async () => {
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/${repoSlug}/pull-requests`)
+      .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
         values: [],
       });
 
-    const pullRequests = await bot.getPullRequestsForRepo(
-      BITBUCKET_PROJECT,
-      repoSlug
-    );
+    const pullRequests = await bot.getPullRequestsForRepo(projectKey, repoSlug);
 
     expect(pullRequests).toHaveLength(0);
   });
 
   it('handles API errors gracefully', async () => {
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/${repoSlug}/pull-requests`)
+      .get(`/projects/${projectKey}/repos/${repoSlug}/pull-requests`)
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(500, { error: 'Internal server error' });
 
-    const pullRequests = await bot.getPullRequestsForRepo(
-      BITBUCKET_PROJECT,
-      repoSlug
-    );
+    const pullRequests = await bot.getPullRequestsForRepo(projectKey, repoSlug);
 
     expect(pullRequests).toHaveLength(0);
   });
 });
 
 describe('getPullRequests', () => {
-  it('gets pull requests from multiple repositories', async () => {
-    // Mock repositories endpoint
+  it('gets pull requests from multiple repositories across projects', async () => {
+    // Mock projects endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos`)
+      .get('/projects')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
         values: [
-          { slug: 'repo1', name: 'Repository 1' },
-          { slug: 'repo2', name: 'Repository 2' },
+          { key: 'PROJ1', name: 'Project 1' },
+          { key: 'PROJ2', name: 'Project 2' },
         ],
       });
 
-    // Mock PRs for repo1
+    // Mock repositories for PROJ1
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/repo1/pull-requests`)
+      .get('/projects/PROJ1/repos')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ slug: 'repo1', name: 'Repository 1' }],
+      });
+
+    // Mock repositories for PROJ2
+    nock(API_BASE_URL)
+      .get('/projects/PROJ2/repos')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ slug: 'repo2', name: 'Repository 2' }],
+      });
+
+    // Mock PRs for PROJ1/repo1
+    nock(API_BASE_URL)
+      .get('/projects/PROJ1/repos/repo1/pull-requests')
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -231,9 +346,9 @@ describe('getPullRequests', () => {
         ],
       });
 
-    // Mock PRs for repo2
+    // Mock PRs for PROJ2/repo2
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/repo2/pull-requests`)
+      .get('/projects/PROJ2/repos/repo2/pull-requests')
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -252,8 +367,10 @@ describe('getPullRequests', () => {
 
     expect(pullRequests).toHaveLength(2);
     expect(pullRequests[0].id).toBe(1);
+    expect(pullRequests[0].projectKey).toBe('PROJ1');
     expect(pullRequests[0].repoSlug).toBe('repo1');
     expect(pullRequests[1].id).toBe(2);
+    expect(pullRequests[1].projectKey).toBe('PROJ2');
     expect(pullRequests[1].repoSlug).toBe('repo2');
   });
 });
@@ -262,13 +379,13 @@ describe('approvePullRequest', () => {
   it('approves successfully', async () => {
     const pr = {
       id: 1,
-      projectKey: BITBUCKET_PROJECT,
+      projectKey: 'MYPROJ',
       repoSlug: 'test-repo',
     };
 
     nock(API_BASE_URL)
       .put(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
+        `/projects/MYPROJ/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -286,13 +403,13 @@ describe('approvePullRequest', () => {
   it('handles already approved', async () => {
     const pr = {
       id: 2,
-      projectKey: BITBUCKET_PROJECT,
+      projectKey: 'MYPROJ',
       repoSlug: 'test-repo',
     };
 
     nock(API_BASE_URL)
       .put(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/2/participants/${RENOVATE_BOT_USER}`
+        `/projects/MYPROJ/repos/test-repo/pull-requests/2/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(409, {
@@ -330,9 +447,18 @@ describe('main with dry run', () => {
     // Set dry run mode
     process.env.DRY_RUN = 'true';
 
+    // Mock projects endpoint
+    nock(API_BASE_URL)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ key: 'MYPROJ', name: 'My Project' }],
+      });
+
     // Mock repositories endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos`)
+      .get('/projects/MYPROJ/repos')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -341,7 +467,7 @@ describe('main with dry run', () => {
 
     // Mock PRs endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests`)
+      .get('/projects/MYPROJ/repos/test-repo/pull-requests')
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -373,9 +499,18 @@ describe('main with dry run', () => {
   it('runs normally when DRY_RUN is not set', async () => {
     // Don't set DRY_RUN (should default to normal mode)
 
+    // Mock projects endpoint
+    nock(API_BASE_URL)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ key: 'MYPROJ', name: 'My Project' }],
+      });
+
     // Mock repositories endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos`)
+      .get('/projects/MYPROJ/repos')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -384,7 +519,7 @@ describe('main with dry run', () => {
 
     // Mock PRs endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests`)
+      .get('/projects/MYPROJ/repos/test-repo/pull-requests')
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -402,7 +537,7 @@ describe('main with dry run', () => {
     // Mock approval endpoint - this should be called in normal mode
     nock(API_BASE_URL)
       .put(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
+        `/projects/MYPROJ/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -422,9 +557,18 @@ describe('main with dry run', () => {
     // Set DRY_RUN to false
     process.env.DRY_RUN = 'false';
 
+    // Mock projects endpoint
+    nock(API_BASE_URL)
+      .get('/projects')
+      .query({ limit: 1000 })
+      .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
+      .reply(200, {
+        values: [{ key: 'MYPROJ', name: 'My Project' }],
+      });
+
     // Mock repositories endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos`)
+      .get('/projects/MYPROJ/repos')
       .query({ limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -433,7 +577,7 @@ describe('main with dry run', () => {
 
     // Mock PRs endpoint
     nock(API_BASE_URL)
-      .get(`/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests`)
+      .get('/projects/MYPROJ/repos/test-repo/pull-requests')
       .query({ state: 'OPEN', limit: 1000 })
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {
@@ -451,7 +595,7 @@ describe('main with dry run', () => {
     // Mock approval endpoint - this should be called in normal mode
     nock(API_BASE_URL)
       .put(
-        `/projects/${BITBUCKET_PROJECT}/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
+        `/projects/MYPROJ/repos/test-repo/pull-requests/1/participants/${RENOVATE_BOT_USER}`
       )
       .matchHeader('Authorization', `Bearer ${BITBUCKET_TOKEN}`)
       .reply(200, {

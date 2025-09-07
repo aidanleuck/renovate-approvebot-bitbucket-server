@@ -1,13 +1,8 @@
 const bunyan = require('bunyan');
 const got = require('got');
 
-const {
-  BITBUCKET_SERVER_URL,
-  BITBUCKET_TOKEN,
-  BITBUCKET_PROJECT,
-  RENOVATE_BOT_USER,
-  DRY_RUN,
-} = process.env;
+const { BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, RENOVATE_BOT_USER, DRY_RUN } =
+  process.env;
 const MANUAL_MERGE_MESSAGE = 'merge this manually';
 const AUTO_MERGE_MESSAGE = '**Automerge**: Enabled.';
 
@@ -42,23 +37,70 @@ function isAutomerging(pr) {
   }
 }
 
-async function getAllRepositories() {
-  const reposEndpoint = `projects/${BITBUCKET_PROJECT}/repos`;
+async function getAllProjects() {
+  const projectsEndpoint = 'projects';
   log.info(
-    'Requesting repositories from %s%s...',
+    'Requesting projects from %s%s...',
     DEFAULT_OPTIONS.prefixUrl,
-    reposEndpoint
+    projectsEndpoint
   );
 
   try {
-    const response = await got(reposEndpoint, {
+    const response = await got(projectsEndpoint, {
       ...DEFAULT_OPTIONS,
       searchParams: {
-        limit: 1000, // Get all repositories
+        limit: 1000, // Get all projects
       },
     });
 
     return response.body.values || [];
+  } catch (error) {
+    log.error(error, 'Failed to get projects');
+    throw error;
+  }
+}
+
+async function getAllRepositories() {
+  try {
+    const projects = await getAllProjects();
+    log.info(`Found ${projects.length} projects`);
+
+    const allRepositories = [];
+
+    // eslint-disable-next-line no-await-in-loop
+    for (const project of projects) {
+      const reposEndpoint = `projects/${project.key}/repos`;
+      log.info(
+        'Requesting repositories from %s%s...',
+        DEFAULT_OPTIONS.prefixUrl,
+        reposEndpoint
+      );
+
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const response = await got(reposEndpoint, {
+          ...DEFAULT_OPTIONS,
+          searchParams: {
+            limit: 1000, // Get all repositories
+          },
+        });
+
+        const repositories = (response.body.values || []).map((repo) => ({
+          ...repo,
+          projectKey: project.key,
+        }));
+
+        allRepositories.push(...repositories);
+      } catch (error) {
+        log.error(
+          error,
+          `Failed to get repositories for project ${project.key}`
+        );
+        // Continue with other projects even if one fails
+      }
+    }
+
+    return allRepositories;
   } catch (error) {
     log.error(error, 'Failed to get repositories');
     throw error;
@@ -107,16 +149,14 @@ async function getPullRequestsForRepo(projectKey, repoSlug) {
 async function getPullRequests() {
   try {
     const repositories = await getAllRepositories();
-    log.info(
-      `Found ${repositories.length} repositories in project ${BITBUCKET_PROJECT}`
-    );
+    log.info(`Found ${repositories.length} repositories across all projects`);
 
     const allPullRequests = [];
 
     // eslint-disable-next-line no-await-in-loop
     for (const repo of repositories) {
       // eslint-disable-next-line no-await-in-loop
-      const prs = await getPullRequestsForRepo(BITBUCKET_PROJECT, repo.slug);
+      const prs = await getPullRequestsForRepo(repo.projectKey, repo.slug);
       allPullRequests.push(...prs);
     }
 
@@ -149,14 +189,9 @@ function approvePullRequest(pr) {
 }
 
 async function main() {
-  if (
-    !BITBUCKET_SERVER_URL ||
-    !BITBUCKET_TOKEN ||
-    !BITBUCKET_PROJECT ||
-    !RENOVATE_BOT_USER
-  ) {
+  if (!BITBUCKET_SERVER_URL || !BITBUCKET_TOKEN || !RENOVATE_BOT_USER) {
     log.fatal(
-      'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, BITBUCKET_PROJECT, RENOVATE_BOT_USER environment variables is not set.'
+      'At least one of BITBUCKET_SERVER_URL, BITBUCKET_TOKEN, RENOVATE_BOT_USER environment variables is not set.'
     );
     process.exit(1);
   }
@@ -236,6 +271,7 @@ if (require.main === module) {
 
 module.exports = {
   isAutomerging,
+  getAllProjects,
   getAllRepositories,
   getPullRequestsForRepo,
   getPullRequests,
