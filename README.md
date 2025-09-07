@@ -10,22 +10,22 @@ For GitHub, see [renovatebot/renovate-approve-bot](https://github.com/renovatebo
 On each run, the bot will:
 
 1. Get all repositories in the specified Bitbucket Server projects
-2. Get all open PRs from the PR_AUTHOR_USER in those repositories
+2. Get all open PRs from the `PR_AUTHOR_USER` in those repositories
 3. Filter out PRs where "automerge" is disabled
 4. Approve the "automerge" PRs
 
 ## Usage
 
 1. Create a Bitbucket Server account for the renovate-approve-bot and add it to your projects (Recommended)
-2. [Create a Personal Access Token](https://confluence.atlassian.com/bitbucketserver/personal-access-tokens-939515499.html) with `PROJECT_READ` and `REPO_WRITE` permissions
+2. [Create a Personal Access Token](https://confluence.atlassian.com/bitbucketserver/personal-access-tokens-939515499.html) with `PROJECT_READ` permissions
 3. Grant the renovate-approve-bot account appropriate permissions on your repositories
 4. Optionally, add the renovate-approve-bot account to the default reviewers if you require approval from default reviewers
 5. Set the environment variables:
    - `BITBUCKET_SERVER_URL`: Base URL of your Bitbucket Server instance (e.g., `https://bitbucket.mycompany.com`)
    - `BITBUCKET_TOKEN`: Personal Access Token created in step 2
    - `BITBUCKET_PROJECTS` (optional): Array of Bitbucket Server project keys where repositories will be searched (JSON array or comma-separated string). If not provided or empty, all projects accessible by the token will be autodiscovered
-   - `RENOVATE_BOT_USER`: Bitbucket Server username of your Renovate Bot (this user will approve PRs)
-   - `PR_AUTHOR_USER` (required): Bitbucket Server username that opens the PRs to be approved. Must be different from `RENOVATE_BOT_USER` because Bitbucket Server does not allow users to approve their own PRs.
+   - `RENOVATE_BOT_USER`: Bitbucket Server username of your Renovate Bot this is the user this bot will run under and approve PRs created by Renovate.
+   - `PR_AUTHOR_USER` (required): Bitbucket Server username that opens the PRs to be approved. Must be different from `RENOVATE_BOT_USER` because Bitbucket Server does not allow users to approve their own PRs. This should be the same user that Renovate is configured to use when opening PRs (the Renovate PR author).
    - `DRY_RUN` (optional): Set to `true` to enable dry run mode, which will only log what would be approved without making actual API calls
 6. Run the bot (on a schedule similarly to Renovate Bot, e.g. as a [Cron](https://en.wikipedia.org/wiki/Cron) job):
    - With Docker:
@@ -55,10 +55,13 @@ Here's an example of how to set up the environment variables:
 ```bash
 export BITBUCKET_SERVER_URL="https://bitbucket.mycompany.com"
 export BITBUCKET_TOKEN="your-personal-access-token"
-export BITBUCKET_PROJECTS='["PROJ1", "PROJ2"]'  # JSON array
+export BITBUCKET_PROJECTS='["PROJ1", "PROJ2"]'  # JSON array (optional)
 # OR
-export BITBUCKET_PROJECTS="PROJ1,PROJ2"         # Comma-separated
-export RENOVATE_BOT_USER="renovate-bot"
+export BITBUCKET_PROJECTS="PROJ1,PROJ2"         # Comma-separated (optional)
+export RENOVATE_BOT_USER="renovate-bot"         # This user will approve PRs
+export PR_AUTHOR_USER="renovate-pr-author"      # User that Renovate uses to create PRs
+# Optional: enable dry run mode
+# export DRY_RUN="true"
 ```
 
 The `BITBUCKET_PROJECTS` environment variable can be set as either:
@@ -118,9 +121,14 @@ spec:
                       name: renovate-approve-bot-secret
                       key: token
                 - name: BITBUCKET_PROJECTS
-                  value: '["PROJ1", "PROJ2"]'
+                  value: '["PROJ1", "PROJ2"]' # Optional, can be omitted for autodiscovery
                 - name: RENOVATE_BOT_USER
-                  value: 'renovate-bot'
+                  value: 'renovate-bot' # This user will approve PRs
+                - name: PR_AUTHOR_USER
+                  value: 'renovate-pr-author' # User that Renovate uses to create PRs
+                # Optional: Set to 'true' to enable dry run mode
+                # - name: DRY_RUN
+                #   value: 'false'
           restartPolicy: OnFailure
 ```
 
@@ -137,8 +145,11 @@ pipeline {
     environment {
         BITBUCKET_SERVER_URL = 'https://bitbucket.mycompany.com'
         BITBUCKET_TOKEN = credentials('renovate-approve-bot-token')
-        BITBUCKET_PROJECTS = '["PROJ1", "PROJ2"]'
-        RENOVATE_BOT_USER = 'renovate-bot'
+        BITBUCKET_PROJECTS = '["PROJ1", "PROJ2"]'  // Optional, can be omitted for autodiscovery
+        RENOVATE_BOT_USER = 'renovate-bot'  // This user will approve PRs
+        PR_AUTHOR_USER = 'renovate-pr-author'  // User that Renovate uses to create PRs
+        // Optional: Set to 'true' to enable dry run mode
+        // DRY_RUN = 'false'
     }
     stages {
         stage('Approve Renovate PRs') {
@@ -183,17 +194,3 @@ pipeline {
    ```bash
    npm run prettier-fix
    ```
-
-## API Differences from Bitbucket Cloud
-
-This implementation uses the Bitbucket Server REST API which differs from Bitbucket Cloud:
-
-- **Authentication**: Uses Personal Access Tokens instead of username/password
-- **Base URL**: Uses your server instance URL + `/rest/api/1.0/` instead of `api.bitbucket.org/2.0/`
-- **Project Structure**: Uses project keys and repository slugs instead of workspaces, with configurable project selection
-- **API Endpoints**: Different endpoint structure for repositories and pull requests
-
-## Security / Disclosure
-
-If you discover any important bug with `renovate-approve-bot-bitbucket-server` that may pose a security problem, please disclose it confidentially first, so that it can be assessed and hopefully fixed prior to being exploited.
-Please do not raise GitHub issues for security-related doubts or problems.

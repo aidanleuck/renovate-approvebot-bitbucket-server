@@ -13,19 +13,6 @@ const autoMergeDescription = '...\n\n🚦 **Automerge**: Enabled.\n\n...';
 const manualMergeDescription =
   '...\n\n🚦 **Automerge**: Disabled by config. Please merge this manually once you are satisfied.\n\n...';
 
-// Test helper functions
-// This function is kept for backward compatibility but is no longer recommended
-// Use setupStaticEnvironment() before all tests and only modify specific variables in individual tests
-function resetEnvironment() {
-  // Reset environment variables to default test values
-  process.env.BITBUCKET_SERVER_URL = BITBUCKET_SERVER_URL;
-  process.env.BITBUCKET_TOKEN = BITBUCKET_TOKEN;
-  process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
-  process.env.RENOVATE_BOT_USER = RENOVATE_BOT_USER;
-  process.env.PR_AUTHOR_USER = PR_AUTHOR_USER;
-  delete process.env.DRY_RUN;
-}
-
 // Set up static environment variables that rarely change between tests
 function setupStaticEnvironment() {
   process.env.BITBUCKET_SERVER_URL = BITBUCKET_SERVER_URL;
@@ -397,7 +384,7 @@ describe('getPullRequests', () => {
   it('gets pull requests from multiple repositories across configured projects', async () => {
     // Ensure BITBUCKET_PROJECTS is set
     process.env.BITBUCKET_PROJECTS = BITBUCKET_PROJECTS;
-    
+
     // Mock repositories for PROJ1
     mockRepositories('PROJ1', [{ slug: 'test-repo', name: 'Test Repository' }]);
 

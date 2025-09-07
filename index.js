@@ -28,6 +28,26 @@ const log = bunyan.createLogger({
   },
 });
 
+/**
+ * Print the current configuration of the bot, omitting sensitive information.
+ */
+function printConfiguration() {
+  log.info(
+    {
+      configuration: {
+        BITBUCKET_SERVER_URL: BITBUCKET_SERVER_URL,
+        BITBUCKET_PROJECTS:
+          BITBUCKET_PROJECTS ||
+          'Not set (will autodiscover all accessible projects)',
+        RENOVATE_BOT_USER: RENOVATE_BOT_USER,
+        PR_AUTHOR_USER: PR_AUTHOR_USER,
+        DRY_RUN: DRY_RUN || 'Not set (default: false)',
+      },
+    },
+    'Bot configuration'
+  );
+}
+
 function isAutomerging(pr) {
   try {
     if (!pr.description) {
@@ -76,7 +96,7 @@ async function getProjectKeys() {
       // Try parsing as JSON array first
       projectKeys = JSON.parse(BITBUCKET_PROJECTS);
     } catch (error) {
-  // If not JSON, treat as comma-separated string
+      // If not JSON, treat as comma-separated string
       projectKeys = BITBUCKET_PROJECTS.split(',')
         .map((key) => key.trim())
         .filter((key) => key);
@@ -257,6 +277,9 @@ async function main() {
     process.exit(1);
   }
 
+  // Print current configuration
+  printConfiguration();
+
   const isDryRun = DRY_RUN && DRY_RUN.toLowerCase() === 'true';
 
   if (isDryRun) {
@@ -338,5 +361,6 @@ module.exports = {
   getPullRequestsForRepo,
   getPullRequests,
   approvePullRequest,
+  printConfiguration,
   main,
 };
